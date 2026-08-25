@@ -1,11 +1,19 @@
 const API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
+const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
 const DASHBOARD_SESSION_TTL_SECONDS = 30 * 60;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+const DEFAULT_WEATHER_PLACE = {
+  name: "TP Ho Chi Minh",
+  latitude: 10.8231,
+  longitude: 106.6297,
+  source: "default"
+};
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -612,13 +620,174 @@ async function isWeatherLocationFollowUp(env, message, text) {
 }
 
 function enrichLiveQuery(env, question) {
-  const normalized = normalizeText(question);
-
   if (isWeatherQuestion(question) && !hasWeatherLocation(question)) {
     return `${question} tai ${env.DEFAULT_WEATHER_LOCATION || "TP Ho Chi Minh, Viet Nam"}`;
   }
 
   return question;
+}
+
+function getWeatherCodeLabel(code) {
+  const labels = {
+    0: "troi quang",
+    1: "it may",
+    2: "may rai rac",
+    3: "nhieu may",
+    45: "suong mu",
+    48: "suong mu dong bang",
+    51: "mua phun nhe",
+    53: "mua phun vua",
+    55: "mua phun nang",
+    61: "mua nhe",
+    63: "mua vua",
+    65: "mua nang",
+    80: "mua rao nhe",
+    81: "mua rao vua",
+    82: "mua rao manh",
+    95: "co dong",
+    96: "dong kem mua da nhe",
+    99: "dong kem mua da manh"
+  };
+
+  return labels[code] || "chua ro hien tuong";
+}
+
+function getWeatherPlaceFromText(env, text) {
+  const normalized = normalizeText(text);
+  const defaultName = env.DEFAULT_WEATHER_LOCATION || DEFAULT_WEATHER_PLACE.name;
+
+  if (normalized.includes("an phu dong") || normalized.includes("an thoi dong")) {
+    return {
+      name: "An Phu Dong, Quan 12, TP Ho Chi Minh",
+      latitude: 10.8619,
+      longitude: 106.6881,
+      source: "local_map"
+    };
+  }
+
+  if (normalized.includes("quan 12") || normalized.includes("q12")) {
+    return {
+      name: "Quan 12, TP Ho Chi Minh",
+      latitude: 10.8672,
+      longitude: 106.6413,
+      source: "local_map"
+    };
+  }
+
+  if (
+    normalized.includes("hcm") ||
+    normalized.includes("tphcm") ||
+    normalized.includes("ho chi minh") ||
+    normalized.includes("sai gon")
+  ) {
+    return {
+      ...DEFAULT_WEATHER_PLACE,
+      source: "local_map"
+    };
+  }
+
+  const cleaned = normalized
+    .replace(/\b(thoi tiet|du bao|hom nay|nay|bay gio|mua khong|nong khong|lanh khong|tai|o|cho|minh|giup|nhe|sao)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned || cleaned.length < 3) {
+    return {
+      ...DEFAULT_WEATHER_PLACE,
+      name: defaultName,
+      source: "default"
+    };
+  }
+
+  return {
+    name: `${cleaned}, Viet Nam`,
+    source: "query"
+  };
+}
+
+async function geocodeWeatherPlace(env, text) {
+  const place = getWeatherPlaceFromText(env, text);
+
+  if (typeof place.latitude === "number" && typeof place.longitude === "number") {
+    return place;
+  }
+
+  try {
+    const url = new URL(OPEN_METEO_GEOCODING_URL);
+    url.searchParams.set("name", place.name);
+    url.searchParams.set("count", "1");
+    url.searchParams.set("language", "vi");
+    url.searchParams.set("format", "json");
+
+    const response = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(8000)
+    });
+    const data = await response.json().catch(() => ({}));
+    const result = data?.results?.[0];
+
+    if (response.ok && result) {
+      return {
+        name: [result.name, result.admin1, result.country].filter(Boolean).join(", "),
+        latitude: result.latitude,
+        longitude: result.longitude,
+        timezone: result.timezone,
+        source: "open_meteo_geocoding"
+      };
+    }
+  } catch (error) {
+    console.error("Open-Meteo geocoding failed:", error);
+  }
+
+  return {
+    ...DEFAULT_WEATHER_PLACE,
+    name: env.DEFAULT_WEATHER_LOCATION || DEFAULT_WEATHER_PLACE.name,
+    source: "default_fallback"
+  };
+}
+
+async function answerWeatherQuestion(env, message, question) {
+  const place = await geocodeWeatherPlace(env, question);
+  const url = new URL(OPEN_METEO_FORECAST_URL);
+  url.searchParams.set("latitude", String(place.latitude));
+  url.searchParams.set("longitude", String(place.longitude));
+  url.searchParams.set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m");
+  url.searchParams.set("hourly", "precipitation_probability");
+  url.searchParams.set("forecast_days", "1");
+  url.searchParams.set("timezone", place.timezone || "Asia/Ho_Chi_Minh");
+
+  const response = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(9000)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data?.current) {
+    throw new Error(`Open-Meteo failed: HTTP ${response.status}`);
+  }
+
+  const current = data.current;
+  const nextRainProbability =
+    Array.isArray(data.hourly?.precipitation_probability) && data.hourly.precipitation_probability.length
+      ? Math.max(...data.hourly.precipitation_probability.slice(0, 6).map((value) => Number(value || 0)))
+      : null;
+  const rainLine =
+    nextRainProbability === null
+      ? ""
+      : `\nXac suat mua cao nhat 6 gio toi: ${Math.round(nextRainProbability)}%.`;
+  const sourceLine = place.source === "default_fallback" ? "\nKhong tim ro dia diem, minh tam dung TP HCM." : "";
+
+  if (env.DB) {
+    await saveSearch(env, message, `weather:${place.name}`, `Open-Meteo ${current.time || ""}`, [
+      { title: "Open-Meteo Weather Forecast API", url: "https://open-meteo.com/en/docs" }
+    ]);
+  }
+
+  return limitText(
+    `Thoi tiet ${place.name} luc ${current.time || "hien tai"}: ${getWeatherCodeLabel(Number(current.weather_code))}.\n` +
+      `Nhiet do ${Math.round(Number(current.temperature_2m))}C, cam giac ${Math.round(Number(current.apparent_temperature))}C.\n` +
+      `Do am ${Math.round(Number(current.relative_humidity_2m))}%, gio ${Math.round(Number(current.wind_speed_10m))} km/h, mua hien tai ${Number(current.precipitation || 0)} mm.` +
+      rainLine +
+      sourceLine
+  );
 }
 
 function extractHtmlMeta(html) {
@@ -1544,6 +1713,15 @@ ${JSON.stringify(compactContext).slice(0, 12000)}
 async function answerGeneralQuestion(env, message, question) {
   const { context, scopeLabel } = await getVisibleContext(env, message);
 
+  if (isWeatherQuestion(question)) {
+    try {
+      return await answerWeatherQuestion(env, message, question);
+    } catch (error) {
+      console.error(error);
+      return "Minh chua lay duoc thoi tiet luc nay. Ban gui lai dia diem cu the hon nhe, vi du: thoi tiet Quan 12 TP HCM.";
+    }
+  }
+
   if (isLiveInfoQuestion(question)) {
     try {
       const query = enrichLiveQuery(env, question);
@@ -1583,7 +1761,11 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
     );
   } catch (error) {
     console.error(error);
-    return formatChatContextFallback(context, scopeLabel);
+    if (isContextQuestion(question)) {
+      return formatChatContextFallback(context, scopeLabel);
+    }
+
+    return "Gemini dang loi hoac het quota nen minh chua tra loi thong minh duoc luc nay. Cac lenh luu link, dashboard va thoi tiet van chay rieng.";
   }
 }
 
