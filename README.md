@@ -136,6 +136,10 @@ nhu thoi tiet, tin moi, ty gia, gia vang se thu dung web search; neu khong ghi d
 thoi tiet mac dinh la TP Ho Chi Minh.
 Neu vua hoi thoi tiet roi gui tiep ten dia diem, bot se hieu do la dia diem can tra cuu thoi tiet.
 Moi lan bot goi Gemini, Worker se ghi usage vao D1 de dashboard xem so call, token va loi quota/429.
+Bot co them intent router: voi moi tin nhan khong phai link/lenh bao mat, bot doc tin moi,
+state cu va cac tin gan nhat de doan y dinh nhu weather, rental_search, context_summary,
+broken_links, help hoac general_chat. State nay duoc luu trong bang `conversation_state`
+de cac cau noi cut nhu "cai do sao", "roi sao", "o dau" van bam theo ngu canh chat hien tai.
 
 Neu muon nhan rieng voi bot de hoi tong du lieu tat ca group/chat, set secret admin:
 

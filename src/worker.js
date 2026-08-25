@@ -145,6 +145,30 @@ function safeJsonParse(value, fallback = {}) {
   }
 }
 
+function parseJsonFromText(text, fallback = null) {
+  const value = String(text || "").trim();
+
+  if (!value) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(value.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+  } catch {
+    const match = value.match(/\{[\s\S]*\}/);
+
+    if (!match) {
+      return fallback;
+    }
+
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return fallback;
+    }
+  }
+}
+
 function truncateForDb(value, maxLength = 1200) {
   const text = String(value || "");
 
@@ -907,6 +931,73 @@ async function saveMessage(env, message, eventName = "message.text.received") {
     .run();
 }
 
+async function getConversationState(env, chatId) {
+  if (!env.DB || !chatId) {
+    return {};
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT state_json
+       FROM conversation_state
+       WHERE chat_id = ?
+       LIMIT 1`
+    )
+      .bind(chatId)
+      .first();
+
+    return safeJsonParse(result?.state_json, {});
+  } catch (error) {
+    console.error("Failed to read conversation state:", error);
+    return {};
+  }
+}
+
+async function saveConversationState(env, message, route, question) {
+  if (!env.DB || !message.chat?.id) {
+    return;
+  }
+
+  try {
+    const state = {
+      intent: route.intent || "",
+      topic: route.topic || "",
+      rewritten_question: route.rewritten_question || question || "",
+      target_location: route.target_location || "",
+      needs_web: Boolean(route.needs_web),
+      confidence: Number(route.confidence || 0),
+      last_user_text: redactSensitiveText(question),
+      updated_at: new Date().toISOString()
+    };
+
+    await env.DB.prepare(
+      `INSERT INTO conversation_state
+        (chat_id, chat_type, user_id, user_name, intent, topic, state_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(chat_id) DO UPDATE SET
+         chat_type = excluded.chat_type,
+         user_id = excluded.user_id,
+         user_name = excluded.user_name,
+         intent = excluded.intent,
+         topic = excluded.topic,
+         state_json = excluded.state_json,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(
+        message.chat?.id || "",
+        message.chat?.chat_type || "",
+        message.from?.id || "",
+        message.from?.display_name || "",
+        route.intent || "",
+        route.topic || "",
+        JSON.stringify(state)
+      )
+      .run();
+  } catch (error) {
+    console.error("Failed to save conversation state:", error);
+  }
+}
+
 async function saveLink(env, message, url, urlInfo, summaryInfo) {
   await env.DB.prepare(
     `INSERT INTO links
@@ -1291,6 +1382,99 @@ async function getVisibleContext(env, message) {
   return { context, scopeLabel, canViewGlobal };
 }
 
+function normalizeRouteIntent(intent) {
+  const normalized = normalizeText(intent).replace(/[^a-z0-9_]+/g, "_");
+  const allowed = new Set([
+    "weather",
+    "live_search",
+    "rental_search",
+    "context_summary",
+    "broken_links",
+    "help",
+    "general_chat",
+    "small_talk",
+    "ignore"
+  ]);
+
+  return allowed.has(normalized) ? normalized : "general_chat";
+}
+
+async function inferConversationRoute(env, message, question) {
+  if (!env.GEMINI_API_KEY || !question.trim()) {
+    return null;
+  }
+
+  const { context, scopeLabel } = await getVisibleContext(env, message);
+  const compactContext = buildConversationContext(context, scopeLabel);
+  const previousState = await getConversationState(env, message.chat?.id || "");
+  const prompt = `
+Ban la bo dinh tuyen y dinh cho Zalo bot. Chi tra ve JSON hop le, khong viet giai thich.
+Nhiem vu: doc tin nhan moi, state cu va context gan nhat de hieu nguoi dung dang muon gi nhu mot nguoi dang noi chuyen tu nhien.
+
+Intent hop le:
+- weather: hoi thoi tiet/du bao/mua/nong/lanh.
+- live_search: hoi thong tin moi can web, tin tuc, gia vang, ty gia, lich, su kien hien tai.
+- rental_search: tim nha/phong/can ho/thue nha/kiem tra link thue nha.
+- context_summary: hoi bot da luu/thu thap/biet bao nhieu/co du lieu gi trong chat/group.
+- broken_links: hoi link loi/hong/chet.
+- help: hoi cach dung bot.
+- general_chat: cau hoi chung, hoi tiep, giai thich, tu van.
+- small_talk: chao hoi/noi chuyen nhe.
+- ignore: tin vo nghia khong can tra loi dai.
+
+Quy tac:
+- Neu tin moi ngan/cut nhu "cai do sao", "roi sao", "o dau", hay mo rong bang state cu va recent_messages.
+- Neu tin moi chi la dia diem va state cu/recent_messages la weather, chon weather va viet lai cau hoi day du.
+- Neu nhac "KEY_Dashboard" thi khong xu ly o router vi code rieng da xu ly bao mat.
+- Khong bao gio dua token, secret, api key vao rewritten_question.
+- needs_web=true cho weather/live_search va rental_search khi can tim tren internet.
+- confidence tu 0 den 1.
+
+Tra ve dung JSON schema:
+{
+  "intent": "general_chat",
+  "confidence": 0.8,
+  "topic": "chu de ngan",
+  "rewritten_question": "cau hoi da viet lai day du bang tieng Viet khong dau",
+  "target_location": "",
+  "needs_web": false,
+  "reason": "ly do rat ngan"
+}
+
+Tin nhan moi: ${redactSensitiveText(question)}
+Chat scope: ${scopeLabel}
+State cu JSON:
+${JSON.stringify(previousState).slice(0, 3000)}
+Context gan nhat JSON:
+${JSON.stringify(compactContext).slice(0, 12000)}
+`;
+
+  try {
+    const text = await askGemini(env, prompt, {
+      feature: "intent_router",
+      message
+    });
+    const parsed = parseJsonFromText(text, null);
+
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return {
+      intent: normalizeRouteIntent(parsed.intent),
+      confidence: Math.max(0, Math.min(1, Number(parsed.confidence || 0))),
+      topic: truncateForDb(parsed.topic || "", 160),
+      rewritten_question: truncateForDb(parsed.rewritten_question || question, 600),
+      target_location: truncateForDb(parsed.target_location || "", 180),
+      needs_web: Boolean(parsed.needs_web),
+      reason: truncateForDb(parsed.reason || "", 240)
+    };
+  } catch (error) {
+    console.error("Intent router failed:", error);
+    return null;
+  }
+}
+
 async function answerGeneralQuestion(env, message, question) {
   const { context, scopeLabel } = await getVisibleContext(env, message);
 
@@ -1337,6 +1521,20 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
   }
 }
 
+function getHelpText() {
+  return [
+    "Lenh bot:",
+    "- Gui link thue nha: bot tu luu va tom tat.",
+    "- Hoi: hom nay co link nao?",
+    "- Hoi: link nao loi?",
+    "- Hoi: co thong tin trong nhom chua?",
+    "- Hoi: thoi tiet hom nay sao?",
+    "- Hoi tu nhien nhu: cai nay la gi / nen lam sao / tom tat giup",
+    "- Gui anh ban do kem caption: Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr",
+    "- Hoi: tim phong duoi 5 trieu / quan 7 / gan truong..."
+  ].join("\n");
+}
+
 async function answerQuestion(env, message, question) {
   const chatId = message.chat?.id;
   const normalized = normalizeText(question);
@@ -1346,17 +1544,7 @@ async function answerQuestion(env, message, question) {
   }
 
   if (normalized.includes("help") || normalized.includes("huong dan")) {
-    return [
-      "Lenh bot:",
-      "- Gui link thue nha: bot tu luu va tom tat.",
-      "- Hoi: hom nay co link nao?",
-      "- Hoi: link nao loi?",
-      "- Hoi: co thong tin trong nhom chua?",
-      "- Hoi: thoi tiet hom nay sao?",
-      "- Hoi tu nhien nhu: cai nay la gi / nen lam sao / tom tat giup",
-      "- Gui anh ban do kem caption: Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr",
-      "- Hoi: tim phong duoi 5 trieu / quan 7 / gan truong..."
-    ].join("\n");
+    return getHelpText();
   }
 
   if (isLiveInfoQuestion(question) && !isRentalQuestion(question)) {
@@ -1431,6 +1619,44 @@ ${context}
   );
 }
 
+async function answerWithConversationRoute(env, message, question) {
+  const route = await inferConversationRoute(env, message, question);
+
+  if (!route || route.confidence < 0.35) {
+    return null;
+  }
+
+  await saveConversationState(env, message, route, question);
+
+  const rewrittenQuestion = route.rewritten_question || question;
+
+  if (route.intent === "ignore") {
+    return getReplyText(message);
+  }
+
+  if (route.intent === "help") {
+    return getHelpText();
+  }
+
+  if (route.intent === "context_summary") {
+    return answerContextQuestion(env, message, rewrittenQuestion);
+  }
+
+  if (route.intent === "broken_links") {
+    return `Cac link dang loi:\n${formatLinkList(await getBrokenLinks(env, message.chat?.id || ""))}`;
+  }
+
+  if (route.intent === "rental_search") {
+    return answerQuestion(env, message, rewrittenQuestion);
+  }
+
+  if (["weather", "live_search", "general_chat", "small_talk"].includes(route.intent)) {
+    return answerGeneralQuestion(env, message, rewrittenQuestion);
+  }
+
+  return null;
+}
+
 async function processTextMessage(env, message, eventName = "message.text.received") {
   const text = getMessageText(message);
   const urls = extractUrls(text);
@@ -1481,12 +1707,22 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
     return answerGeneralQuestion(env, message, `thoi tiet tai ${cleanQuestion || text}`);
   }
 
+  const routedAnswer = await answerWithConversationRoute(env, message, cleanQuestion || text);
+
+  if (routedAnswer) {
+    return routedAnswer;
+  }
+
   if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion) || isContextQuestion(text) || isContextQuestion(cleanQuestion)) {
     return answerQuestion(env, message, cleanQuestion || text);
   }
 
   if (isLikelyQuestion(cleanQuestion || text)) {
     return answerGeneralQuestion(env, message, cleanQuestion || text);
+  }
+
+  if (env.GEMINI_API_KEY && cleanQuestion) {
+    return answerGeneralQuestion(env, message, cleanQuestion);
   }
 
   return getReplyText(message);
