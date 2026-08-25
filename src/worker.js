@@ -150,10 +150,30 @@ function isContextQuestion(text) {
     normalized.includes("co gi") ||
     normalized.includes("tong hop") ||
     normalized.includes("bao cao") ||
+    normalized.includes("bao nhieu") ||
+    normalized.includes("bao nhiu") ||
+    normalized.includes("so luong") ||
     normalized.includes("dashboard") ||
     normalized.includes("bot biet gi") ||
     normalized.includes("hien tai")
   );
+}
+
+function isPrivateChat(message) {
+  return normalizeText(message.chat?.chat_type || "").includes("private");
+}
+
+function getOwnerUserIds(env) {
+  return String(env.OWNER_ZALO_USER_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
+function isOwnerMessage(env, message) {
+  const ownerIds = getOwnerUserIds(env);
+
+  return ownerIds.includes(String(message.from?.id || ""));
 }
 
 function buildMessageMetadata(message, eventName = "message.received") {
@@ -641,10 +661,80 @@ async function getChatContext(env, chatId) {
   };
 }
 
-function formatChatContextFallback(context) {
+async function getGlobalContext(env) {
+  const [countsResult, chatsResult, messagesResult, linksResult, searchesResult, imagesResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
+       UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links
+       UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches
+       UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, chat_type, COUNT(*) AS message_count, MAX(created_at) AS last_message_at
+       FROM messages
+       GROUP BY chat_id, chat_type
+       ORDER BY datetime(last_message_at) DESC
+       LIMIT 12`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, chat_type, user_name, text, created_at, metadata_json
+       FROM messages
+       ORDER BY datetime(created_at) DESC
+       LIMIT 12`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, chat_type, url, title, summary, price_text, area_text, status, http_status, created_at, updated_at, metadata_json
+       FROM links
+       ORDER BY datetime(updated_at) DESC
+       LIMIT 12`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, user_name, query, answer, sources_json, created_at, metadata_json
+       FROM searches
+       ORDER BY datetime(created_at) DESC
+       LIMIT 8`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, user_name, caption, analysis, created_at, metadata_json
+       FROM images
+       ORDER BY datetime(created_at) DESC
+       LIMIT 8`
+    ).all()
+  ]);
+  const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
+
+  return {
+    scope: "global",
+    counts: {
+      messages: counts.messages || 0,
+      links: counts.links || 0,
+      searches: counts.searches || 0,
+      images: counts.images || 0
+    },
+    chats: chatsResult.results || [],
+    messages: messagesResult.results || [],
+    links: linksResult.results || [],
+    searches: (searchesResult.results || []).map((row) => ({
+      ...row,
+      sources: safeJsonParse(row.sources_json, [])
+    })),
+    images: imagesResult.results || []
+  };
+}
+
+function formatChatContextFallback(context, scopeLabel = "nhom nay") {
   const lines = [
-    `Trong nhom nay bot da luu: ${context.counts.messages} tin nhan, ${context.counts.links} link, ${context.counts.searches} cau search, ${context.counts.images} anh.`
+    `Trong ${scopeLabel} bot da luu: ${context.counts.messages} tin nhan, ${context.counts.links} link, ${context.counts.searches} cau search, ${context.counts.images} anh.`
   ];
+
+  if (context.chats?.length > 0) {
+    lines.push(
+      `\nChat co du lieu:\n${context.chats
+        .slice(0, 5)
+        .map((chat, index) => `${index + 1}. ${chat.chat_type || "CHAT"}: ${chat.message_count} tin nhan`)
+        .join("\n")}`
+    );
+  }
 
   if (context.links.length > 0) {
     lines.push(`\nLink gan nhat:\n${formatLinkList(context.links.slice(0, 5))}`);
@@ -666,21 +756,33 @@ function formatChatContextFallback(context) {
 
 async function answerContextQuestion(env, message, question) {
   const chatId = message.chat?.id || "";
-  const context = await getChatContext(env, chatId);
+  const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
+  const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, chatId);
+  const scopeLabel = canViewGlobal ? "tat ca chat/group" : isPrivateChat(message) ? "chat rieng nay" : "nhom nay";
+
+  if (isPrivateChat(message) && !canViewGlobal && getOwnerUserIds(env).length > 0) {
+    return "Tin nhan rieng chi cho admin xem tong du lieu. Tai khoan nay chua nam trong OWNER_ZALO_USER_IDS.";
+  }
 
   if (!env.GEMINI_API_KEY) {
-    return formatChatContextFallback(context);
+    return formatChatContextFallback(context, scopeLabel);
   }
 
   const compactContext = {
+    scope: scopeLabel,
     counts: context.counts,
+    chats: context.chats || [],
     recent_messages: context.messages.map((row) => ({
+      chat_id: row.chat_id,
+      chat_type: row.chat_type,
       user: row.user_name,
       text: redactSensitiveText(row.text),
       at: row.created_at,
       metadata: safeJsonParse(row.metadata_json)
     })),
     recent_links: context.links.map((row) => ({
+      chat_id: row.chat_id,
+      chat_type: row.chat_type,
       url: row.url,
       title: row.title,
       summary: row.summary,
@@ -691,6 +793,7 @@ async function answerContextQuestion(env, message, question) {
       metadata: safeJsonParse(row.metadata_json)
     })),
     recent_searches: context.searches.map((row) => ({
+      chat_id: row.chat_id,
       query: row.query,
       answer: row.answer,
       sources: row.sources,
@@ -698,6 +801,7 @@ async function answerContextQuestion(env, message, question) {
       metadata: safeJsonParse(row.metadata_json)
     })),
     recent_images: context.images.map((row) => ({
+      chat_id: row.chat_id,
       caption: row.caption,
       analysis: row.analysis,
       at: row.created_at,
@@ -722,7 +826,7 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
     return limitText(await askGemini(env, prompt));
   } catch (error) {
     console.error(error);
-    return formatChatContextFallback(context);
+    return formatChatContextFallback(context, scopeLabel);
   }
 }
 

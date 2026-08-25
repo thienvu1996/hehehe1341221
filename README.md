@@ -128,6 +128,16 @@ Bot luu them `metadata_json` cho tin nhan, link, search va anh. Metadata gom eve
 chat id/type/title, nguoi gui, message id/date, so URL trich xuat va thoi diem bot ghi nhan.
 Khi hoi thong tin tong quat, bot dung metadata va du lieu gan nhat trong group hien tai de tra loi.
 
+Neu muon nhan rieng voi bot de hoi tong du lieu tat ca group/chat, set secret admin:
+
+```bash
+npx wrangler secret put OWNER_ZALO_USER_IDS
+```
+
+Gia tri la mot hoac nhieu Zalo user id, ngan cach bang dau phay. Trong group, bot van chi tra loi
+theo du lieu cua group do. Trong tin nhan rieng cua admin, bot co the tong hop toan bo D1.
+Khong nen gui `DASHBOARD_TOKEN` qua Zalo vi day la khoa xem dashboard rieng.
+
 ## Anh ban do va Google Search
 
 Bot co the nhan anh tu Zalo qua event `message.image.received`.
