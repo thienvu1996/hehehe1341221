@@ -827,7 +827,7 @@ function formatLocalDate(dateParts) {
 
 function extractReminderTitle(text) {
   const cleanText = text
-    .replace(/\b(lên lịch|len lich|đặt lịch|dat lich|nhắc tôi|nhac toi|nhắc mình|nhac minh|remind me)\b/gi, " ")
+    .replace(/(lên lịch|len lich|đặt lịch|dat lich|nhắc tôi|nhac toi|nhắc mình|nhac minh|remind me)/gi, " ")
     .replace(/\b(ngày mai|ngay mai|ngày kia|ngay kia|hôm nay|hom nay|tối nay|toi nay|chiều nay|chieu nay|sáng nay|sang nay|mai|mốt)\b/gi, " ")
     .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/gi, " ")
     .replace(/\b(?:lúc|luc|vào|vao)?\s*\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm|sáng|sang|chiều|chieu|tối|toi)?\b/gi, " ")
@@ -846,8 +846,26 @@ function isEmptyReminderTitle(title) {
     normalized === "hen" ||
     normalized === "viec da hen" ||
     normalized === "lich" ||
+    normalized === "len lich" ||
+    normalized === "dat lich" ||
     normalized === "nhac" ||
     normalized.length < 3
+  );
+}
+
+function isCancelReminderDraft(text) {
+  const normalized = normalizeText(text).trim();
+
+  return (
+    normalized === "huy" ||
+    normalized === "huy lich" ||
+    normalized === "huy nhe" ||
+    normalized === "bo qua" ||
+    normalized === "cancel" ||
+    normalized === "cancel reminder" ||
+    normalized.startsWith("huy lich ") ||
+    normalized.startsWith("huy cai nay") ||
+    normalized.startsWith("bo qua ")
   );
 }
 
@@ -1150,19 +1168,25 @@ async function handleReminderDraftFollowUp(env, message, text) {
   const cleanText = getCleanQuestion(text, message.chat?.title || "");
   const normalized = normalizeText(cleanText);
 
-  if (normalized.includes("huy") || normalized.includes("bo qua") || normalized.includes("cancel")) {
+  if (isCancelReminderDraft(cleanText)) {
     await clearReminderDraft(env, message.chat?.id || "");
     return "Đã hủy nháp lịch hẹn.";
   }
 
   if (draft.waitingFor === "purpose") {
-    const title = extractReminderTitle(cleanText);
+    const parsedFollowUp = parseReminderCommand(`lên lịch ${cleanText}`, message);
+    const title = parsedFollowUp?.title || extractReminderTitle(cleanText);
 
     if (isEmptyReminderTitle(title)) {
       return "Bạn muốn lên lịch việc gì? Ví dụ: hẹn công ty nhậu, họp team, nộp tiền phòng.";
     }
 
-    const nextDraft = { ...draft, title, needsVenue: isDiningReminder(title) };
+    const nextDraft = {
+      ...draft,
+      ...(parsedFollowUp && parsedFollowUp.action !== "ask_purpose" ? parsedFollowUp : {}),
+      title,
+      needsVenue: isDiningReminder(title)
+    };
 
     if (nextDraft.needsVenue) {
       await saveReminderDraft(env, message, { ...nextDraft, waitingFor: "venue" });
@@ -1172,10 +1196,10 @@ async function handleReminderDraftFollowUp(env, message, text) {
       ].join("\n");
     }
 
-    if (draft.hasTime && draft.dueLocalTime && draft.dueAt) {
+    if (nextDraft.hasTime && nextDraft.dueLocalTime && nextDraft.dueAt) {
       const reminderReply = await saveReminder(env, message, {
         ...nextDraft,
-        dueAt: new Date(draft.dueAt)
+        dueAt: new Date(nextDraft.dueAt)
       });
       await clearReminderDraft(env, message.chat?.id || "");
       return reminderReply;
@@ -1191,14 +1215,15 @@ async function handleReminderDraftFollowUp(env, message, text) {
     }
 
     const parsed = parseReminderCommand(`lên lịch ${cleanText} ${draft.title}`, message);
+    const title = isEmptyReminderTitle(draft.title) ? parsed.title : draft.title;
     const completedDraft = {
       ...draft,
       ...parsed,
-      title: draft.title,
+      title,
       dueAt: parsed.dueAt
     };
 
-    if (isDiningReminder(completedDraft.title) && !hasExplicitVenue(cleanText)) {
+    if (isDiningReminder(completedDraft.title) && !completedDraft.venue && !hasExplicitVenue(cleanText)) {
       await saveReminderDraft(env, message, { ...completedDraft, waitingFor: "venue" });
       return [
         "Mình đã bắt được thời gian.",
@@ -1224,8 +1249,24 @@ async function handleReminderDraftFollowUp(env, message, text) {
       .replace(/^(có rồi|co roi|quán|quan|ở|o|tại|tai)[,:\s]+/i, "")
       .replace(/^(quán|quan|ở|o|tại|tai)[,:\s]+/i, "")
       .trim();
+
+    if (!draft.hasTime || !draft.dueAt) {
+      await saveReminderDraft(env, message, {
+        ...draft,
+        venue,
+        title: venue ? `${draft.title} tại ${venue}` : draft.title,
+        waitingFor: "time"
+      });
+
+      return [
+        venue ? `Mình ghi nhận quán/địa điểm: ${venue}.` : "Mình ghi nhận phần địa điểm rồi.",
+        "Bạn muốn nhắc lúc mấy giờ/ngày nào? Ví dụ: mai 18h."
+      ].join("\n");
+    }
+
     const reminderReply = await saveReminder(env, message, {
       ...draft,
+      venue,
       title: venue ? `${draft.title} tại ${venue}` : draft.title,
       dueAt: new Date(draft.dueAt)
     });
