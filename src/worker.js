@@ -146,6 +146,8 @@ function isContextQuestion(text) {
     normalized.includes("metadata") ||
     normalized.includes("meta data") ||
     normalized.includes("nhom") ||
+    normalized.includes("group") ||
+    normalized.includes("thu thap") ||
     normalized.includes("da luu") ||
     normalized.includes("co gi") ||
     normalized.includes("tong hop") ||
@@ -251,8 +253,60 @@ function wantsWebSearch(text) {
     normalized.includes("tim tren mang") ||
     normalized.includes("tim tren web") ||
     normalized.includes("tim nha") ||
-    normalized.includes("tim phong")
+    normalized.includes("tim phong") ||
+    normalized.includes("thoi tiet") ||
+    normalized.includes("du bao") ||
+    normalized.includes("mua khong") ||
+    normalized.includes("nong khong") ||
+    normalized.includes("tin moi") ||
+    normalized.includes("hom nay co gi") ||
+    normalized.includes("gia vang") ||
+    normalized.includes("ty gia")
   );
+}
+
+function isLikelyQuestion(text) {
+  const normalized = normalizeText(text).trim();
+
+  return (
+    normalized.endsWith("?") ||
+    normalized.includes(" sao") ||
+    normalized.includes(" nhu nao") ||
+    normalized.includes(" la gi") ||
+    normalized.includes(" co ") ||
+    normalized.startsWith("co ") ||
+    normalized.startsWith("hoi ") ||
+    normalized.startsWith("tim ") ||
+    normalized.startsWith("kiem ") ||
+    normalized.startsWith("thu thap ") ||
+    normalized.startsWith("tom tat ") ||
+    normalized.startsWith("giai thich ") ||
+    normalized.startsWith("check ") ||
+    normalized.startsWith("xem ")
+  );
+}
+
+function isLiveInfoQuestion(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    wantsWebSearch(text) ||
+    normalized.includes("bay gio") ||
+    normalized.includes("hien gio") ||
+    normalized.includes("luc nay") ||
+    normalized.includes("dang co") ||
+    normalized.includes("sap toi")
+  );
+}
+
+function enrichLiveQuery(env, question) {
+  const normalized = normalizeText(question);
+
+  if (normalized.includes("thoi tiet") && !normalized.includes(" o ") && !normalized.includes(" tai ")) {
+    return `${question} tai ${env.DEFAULT_WEATHER_LOCATION || "TP Ho Chi Minh, Viet Nam"}`;
+  }
+
+  return question;
 }
 
 function extractHtmlMeta(html) {
@@ -435,9 +489,11 @@ async function askGeminiInteraction(env, input, options = {}) {
 
 async function searchWeb(env, query) {
   const prompt = `
-Ban la tro ly tim nha thue cho nhom Zalo.
+Ban la tro ly trong nhom Zalo.
 Hay tim web bang Google Search va tra loi ngan gon bang tieng Viet khong dau.
-Uu tien thong tin co link nguon. Neu cau hoi co gia, khu vuc, ban kinh, hay giu dung dieu kien.
+Uu tien thong tin moi, dung dieu kien trong cau hoi, va co link nguon.
+Neu cau hoi ve nha thue, hay uu tien gia, khu vuc, ban kinh, tinh trang link.
+Neu cau hoi ve thoi tiet, hay dua nhiet do, mua/nang, va goi y hanh dong ngan gon.
 
 Cau hoi: ${query}
 `;
@@ -771,7 +827,16 @@ function formatChatContextFallback(context, scopeLabel = "nhom nay") {
   if (context.links.length > 0) {
     lines.push(`\nLink gan nhat:\n${formatLinkList(context.links.slice(0, 5))}`);
   } else {
-    lines.push("\nChua co link thue nha nao duoc luu trong nhom nay.");
+    lines.push(`\nChua co link thue nha nao duoc luu trong ${scopeLabel}.`);
+  }
+
+  if (context.messages.length > 0) {
+    lines.push(
+      `\nTin nhan gan nhat:\n${context.messages
+        .slice(0, 5)
+        .map((message, index) => `${index + 1}. ${message.user_name || "Nguoi dung"}: ${limitText(message.text, 90)}`)
+        .join("\n")}`
+    );
   }
 
   if (context.images.length > 0) {
@@ -841,12 +906,104 @@ async function answerContextQuestion(env, message, question) {
     }))
   };
   const prompt = `
-Ban la bot quan ly thong tin trong group Zalo hien tai.
+Ban la bot quan ly thong tin trong Zalo.
 Tra loi ngan gon bang tieng Viet khong dau.
 Hay dua tren context da luu trong D1: messages, links, searches, images va metadata_json.
-Neu nguoi dung hoi co thong tin/du lieu trong nhom chua, hay noi ro so luong va tom tat nhung gi bot dang biet.
+Neu nguoi dung hoi co thong tin/du lieu chua, hay noi ro pham vi context, so luong va tom tat nhung gi bot dang biet.
 Khong lap lai token, secret, api key, hay noi dung nhay cam neu thay trong context.
 Neu chua co du lieu, hay huong dan gui link/anh/cau hoi de bot thu thap.
+
+Cau hoi: ${question}
+
+Context JSON:
+${JSON.stringify(compactContext).slice(0, 14000)}
+`;
+
+  try {
+    return limitText(await askGemini(env, prompt));
+  } catch (error) {
+    console.error(error);
+    return formatChatContextFallback(context, scopeLabel);
+  }
+}
+
+function buildConversationContext(context, scopeLabel) {
+  return {
+    scope: scopeLabel,
+    counts: context.counts,
+    chats: context.chats || [],
+    recent_messages: context.messages.slice(0, 10).map((row) => ({
+      chat_id: row.chat_id,
+      chat_type: row.chat_type,
+      user: row.user_name,
+      text: redactSensitiveText(row.text),
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_links: context.links.slice(0, 10).map((row) => ({
+      chat_id: row.chat_id,
+      chat_type: row.chat_type,
+      url: row.url,
+      title: row.title,
+      summary: row.summary,
+      price: row.price_text,
+      area: row.area_text,
+      status: row.status,
+      updated_at: row.updated_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_searches: context.searches.slice(0, 6).map((row) => ({
+      chat_id: row.chat_id,
+      query: row.query,
+      answer: row.answer,
+      sources: row.sources,
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_images: context.images.slice(0, 6).map((row) => ({
+      chat_id: row.chat_id,
+      caption: row.caption,
+      analysis: row.analysis,
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    }))
+  };
+}
+
+async function getVisibleContext(env, message) {
+  const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
+  const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, message.chat?.id || "");
+  const scopeLabel = canViewGlobal ? "tat ca chat/group" : isPrivateChat(message) ? "chat rieng nay" : "nhom nay";
+
+  return { context, scopeLabel, canViewGlobal };
+}
+
+async function answerGeneralQuestion(env, message, question) {
+  const { context, scopeLabel } = await getVisibleContext(env, message);
+
+  if (isLiveInfoQuestion(question)) {
+    try {
+      const query = enrichLiveQuery(env, question);
+      const result = await searchWeb(env, query);
+      await saveSearch(env, message, query, result.answer, result.sources);
+      return result.answer || "Chua tim duoc thong tin moi phu hop.";
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  if (!env.GEMINI_API_KEY) {
+    return `${formatChatContextFallback(context, scopeLabel)}\n\nChua co Gemini nen bot chua tra loi hoi dap tu nhien duoc.`;
+  }
+
+  const compactContext = buildConversationContext(context, scopeLabel);
+  const prompt = `
+Ban la tro ly Zalo noi chuyen tu nhien nhu mot nguoi binh thuong, nhung ngan gon va huu ich.
+Tra loi bang tieng Viet khong dau.
+Neu cau hoi lien quan den du lieu nhom/chat, hay dua vao Context JSON.
+Neu cau hoi la kien thuc chung, hay tra loi theo hieu biet cua ban.
+Neu cau hoi can du lieu thoi gian thuc ma web search khong co ket qua trong context, hay noi ro can search lai hoac can dia diem/cu the hon.
+Khong lap lai token, secret, api key, hay noi dung nhay cam.
 
 Cau hoi: ${question}
 
@@ -877,9 +1034,15 @@ async function answerQuestion(env, message, question) {
       "- Hoi: hom nay co link nao?",
       "- Hoi: link nao loi?",
       "- Hoi: co thong tin trong nhom chua?",
+      "- Hoi: thoi tiet hom nay sao?",
+      "- Hoi tu nhien nhu: cai nay la gi / nen lam sao / tom tat giup",
       "- Gui anh ban do kem caption: Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr",
       "- Hoi: tim phong duoi 5 trieu / quan 7 / gan truong..."
     ].join("\n");
+  }
+
+  if (isLiveInfoQuestion(question) && !isRentalQuestion(question)) {
+    return answerGeneralQuestion(env, message, question);
   }
 
   if (isContextQuestion(question)) {
@@ -989,6 +1152,10 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
   if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion) || isContextQuestion(text) || isContextQuestion(cleanQuestion)) {
     return answerQuestion(env, message, cleanQuestion || text);
+  }
+
+  if (isLikelyQuestion(cleanQuestion || text)) {
+    return answerGeneralQuestion(env, message, cleanQuestion || text);
   }
 
   return getReplyText(message);
