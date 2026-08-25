@@ -6,6 +6,9 @@ workers_dev = true
 [observability]
 enabled = true
 
+[triggers]
+crons = ["0 23 * * *"]
+
 [[routes]]
 pattern = "bot.jean1331.io.vn"
 custom_domain = true

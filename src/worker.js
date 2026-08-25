@@ -2323,6 +2323,81 @@ async function sendChatAction(env, chatId, action = "typing") {
   }
 }
 
+function parseCsvValues(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getDailyWeatherChatIds(env) {
+  const configuredChatIds = parseCsvValues(env.DAILY_WEATHER_CHAT_IDS);
+
+  if (configuredChatIds.length > 0) {
+    return configuredChatIds;
+  }
+
+  return getOwnerUserIds(env);
+}
+
+function buildSystemMessage(chatId, chatType = "PRIVATE") {
+  return {
+    chat: {
+      id: chatId,
+      chat_type: chatType,
+      title: ""
+    },
+    from: {
+      id: "system",
+      display_name: "Daily Weather Scheduler"
+    },
+    message_id: `daily-weather-${Date.now()}-${chatId}`,
+    date: Math.floor(Date.now() / 1000),
+    text: ""
+  };
+}
+
+async function sendDailyWeather(env, options = {}) {
+  const chatIds = getDailyWeatherChatIds(env);
+  const location = env.DAILY_WEATHER_LOCATION || env.DEFAULT_WEATHER_LOCATION || "TP Ho Chi Minh";
+  const results = [];
+
+  if (chatIds.length === 0) {
+    return {
+      ok: false,
+      sent: 0,
+      message: "Missing DAILY_WEATHER_CHAT_IDS or OWNER_ZALO_USER_IDS",
+      results
+    };
+  }
+
+  for (const chatId of chatIds) {
+    const syntheticMessage = buildSystemMessage(chatId, options.chatType || "PRIVATE");
+
+    try {
+      const weatherText = await answerWeatherQuestion(env, syntheticMessage, `thoi tiet ${location}`);
+      const prefix = options.manual ? "Test lich thoi tiet 6h:\n" : "Ban tin thoi tiet 6h sang:\n";
+      await sendChatAction(env, chatId, "typing");
+      await sendMessage(env, chatId, `${prefix}${weatherText}`);
+      results.push({ chat_id: chatId, ok: true });
+    } catch (error) {
+      console.error("Failed to send daily weather:", error);
+      results.push({
+        chat_id: chatId,
+        ok: false,
+        error: String(error?.message || error)
+      });
+    }
+  }
+
+  return {
+    ok: results.some((result) => result.ok),
+    sent: results.filter((result) => result.ok).length,
+    location,
+    results
+  };
+}
+
 async function handleWebhook(request, env) {
   if (!env.WEBHOOK_SECRET_TOKEN) {
     return json({ message: "Server is missing WEBHOOK_SECRET_TOKEN" }, 500);
@@ -2574,6 +2649,16 @@ async function handleTestWebhook(request, env) {
   return json(data);
 }
 
+async function handleSendDailyWeather(request, env) {
+  const unauthorizedResponse = authorizeAdminRequest(request, env);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
+  return json(await sendDailyWeather(env, { manual: true }));
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -2602,6 +2687,10 @@ export default {
       return handleTestWebhook(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/admin/send-daily-weather") {
+      return handleSendDailyWeather(request, env);
+    }
+
     if (request.method === "OPTIONS" && ["/admin/dashboard-data", "/admin/dashboard-session"].includes(url.pathname)) {
       return new Response(null, {
         status: 204,
@@ -2618,5 +2707,13 @@ export default {
     }
 
     return json({ message: "Not Found" }, 404);
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      sendDailyWeather(env, { scheduledTime: event.scheduledTime }).catch((error) => {
+        console.error("Scheduled daily weather failed:", error);
+      })
+    );
   }
 };

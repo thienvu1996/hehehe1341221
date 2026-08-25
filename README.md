@@ -138,6 +138,10 @@ Ngoai cac lenh co san, bot se xu ly cau hoi tu nhien bang Gemini. Cau hoi can du
 nhu tin moi, ty gia, gia vang se thu dung web search. Rieng thoi tiet dung Open-Meteo free API
 khong can Gemini; neu khong ghi dia diem, thoi tiet mac dinh la TP Ho Chi Minh.
 Neu vua hoi thoi tiet roi gui tiep ten dia diem, bot se hieu do la dia diem can tra cuu thoi tiet.
+Worker co cron `0 23 * * *` de gui thoi tiet moi ngay luc 06:00 gio Viet Nam.
+Mac dinh gui cho cac `OWNER_ZALO_USER_IDS`; neu muon gui vao chat/group khac, set secret
+`DAILY_WEATHER_CHAT_IDS` bang chat id/group id, ngan cach dau phay. Co the doi dia diem bang
+secret `DAILY_WEATHER_LOCATION`.
 Moi lan bot goi Gemini, Worker se ghi usage vao D1 de dashboard xem so call, token va loi quota/429.
 Bot co them intent router: voi moi tin nhan khong phai link/lenh bao mat, bot doc tin moi,
 state cu va cac tin gan nhat de doan y dinh nhu weather, rental_search, context_summary,
