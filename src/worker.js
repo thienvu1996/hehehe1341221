@@ -2,6 +2,7 @@ const API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
+const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -64,12 +65,33 @@ function extractUrls(text) {
 
 function getCleanQuestion(text, botName = "") {
   let cleanText = String(text || "").trim();
+  const names = [botName, DEFAULT_BOT_DISPLAY_NAME, "Bot Thu Thập atess"].filter(Boolean);
 
-  if (botName) {
-    cleanText = cleanText.replaceAll(`@${botName}`, "");
+  for (const name of names) {
+    cleanText = cleanText.replaceAll(`@${name}`, "");
   }
 
-  return cleanText.replace(/@\S+(?:\s+\S+){0,5}/, "").trim();
+  return cleanText.replace(/^@\S+\s*/, "").trim();
+}
+
+function isRentalQuestion(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes("link") ||
+    normalized.includes("nha") ||
+    normalized.includes("phong") ||
+    normalized.includes("thue") ||
+    normalized.includes("gia") ||
+    normalized.includes("quan") ||
+    normalized.includes("hom nay") ||
+    normalized.includes("loi") ||
+    normalized.includes("help") ||
+    normalized.includes("tim") ||
+    normalized.includes("duoi") ||
+    normalized.includes("trieu") ||
+    /\b\d+\s*tr\b/.test(normalized)
+  );
 }
 
 function extractHtmlMeta(html) {
@@ -407,19 +429,7 @@ async function processTextMessage(env, message) {
   }
 
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
-  const normalized = normalizeText(cleanQuestion);
-
-  if (
-    normalized.includes("link") ||
-    normalized.includes("nha") ||
-    normalized.includes("phong") ||
-    normalized.includes("thue") ||
-    normalized.includes("gia") ||
-    normalized.includes("quan") ||
-    normalized.includes("hom nay") ||
-    normalized.includes("loi") ||
-    normalized.includes("help")
-  ) {
+  if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion)) {
     return answerQuestion(env, message, cleanQuestion || text);
   }
 
@@ -436,7 +446,8 @@ async function callZaloApi(env, methodName, payload = {}) {
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(10000)
   });
 
   const data = await response.json().catch(() => ({}));
