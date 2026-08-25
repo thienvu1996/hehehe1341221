@@ -464,6 +464,27 @@ function isLikelyLocationText(text) {
   );
 }
 
+function hasWeatherLocation(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes(" tai ") ||
+    normalized.includes(" o ") ||
+    normalized.includes("hcm") ||
+    normalized.includes("tphcm") ||
+    normalized.includes("ho chi minh") ||
+    normalized.includes("sai gon") ||
+    normalized.includes("quan") ||
+    normalized.includes("phuong") ||
+    normalized.includes("huyen") ||
+    normalized.includes("thanh pho") ||
+    normalized.includes("tp ") ||
+    normalized.includes("ha noi") ||
+    normalized.includes("da nang") ||
+    normalized.includes("can tho")
+  );
+}
+
 function isLiveInfoQuestion(text) {
   const normalized = normalizeText(text);
 
@@ -503,7 +524,7 @@ async function isWeatherLocationFollowUp(env, message, text) {
 function enrichLiveQuery(env, question) {
   const normalized = normalizeText(question);
 
-  if (isWeatherQuestion(question) && !normalized.includes(" o ") && !normalized.includes(" tai ")) {
+  if (isWeatherQuestion(question) && !hasWeatherLocation(question)) {
     return `${question} tai ${env.DEFAULT_WEATHER_LOCATION || "TP Ho Chi Minh, Viet Nam"}`;
   }
 
@@ -1452,6 +1473,10 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
   }
 
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
+  if (isWeatherQuestion(cleanQuestion || text)) {
+    return answerGeneralQuestion(env, message, cleanQuestion || text);
+  }
+
   if (await isWeatherLocationFollowUp(env, message, cleanQuestion || text)) {
     return answerGeneralQuestion(env, message, `thoi tiet tai ${cleanQuestion || text}`);
   }
