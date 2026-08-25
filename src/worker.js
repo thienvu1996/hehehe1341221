@@ -752,6 +752,13 @@ function parseReminderTime(text) {
   return normalizeScheduleMinute(hour, minute);
 }
 
+function hasReminderTime(text) {
+  return (
+    /\b\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm|sáng|sang|chiều|chieu|tối|toi)?\b/i.test(text) ||
+    /\b\d{1,2}\s*(?:am|pm)\b/i.test(text)
+  );
+}
+
 function addDaysToDateParts(parts, days) {
   const date = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + days));
 
@@ -831,6 +838,161 @@ function extractReminderTitle(text) {
   return cleanText || "việc đã hẹn";
 }
 
+function isEmptyReminderTitle(title) {
+  const normalized = normalizeText(title);
+
+  return (
+    !normalized ||
+    normalized === "hen" ||
+    normalized === "viec da hen" ||
+    normalized === "lich" ||
+    normalized === "nhac" ||
+    normalized.length < 3
+  );
+}
+
+function isDiningReminder(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes("nhau") ||
+    normalized.includes("an ") ||
+    normalized.includes("an toi") ||
+    normalized.includes("uong") ||
+    normalized.includes("cafe") ||
+    normalized.includes("ca phe") ||
+    normalized.includes("quan nhau") ||
+    normalized.includes("nha hang") ||
+    normalized.includes("lien hoan") ||
+    normalized.includes("tat nien")
+  );
+}
+
+function hasExplicitVenue(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes(" tai quan ") ||
+    normalized.includes(" o quan ") ||
+    normalized.includes(" quan nhau ") ||
+    normalized.includes(" nha hang ") ||
+    normalized.includes(" dia chi ") ||
+    normalized.includes("address") ||
+    normalized.includes("venue")
+  );
+}
+
+function isNegativeVenueAnswer(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes("chua co") ||
+    normalized === "chua" ||
+    normalized.includes("khong co") ||
+    normalized.includes("chưa có") ||
+    normalized.includes("goi y") ||
+    normalized.includes("gợi ý")
+  );
+}
+
+function extractRecommendationArea(text) {
+  const normalized = normalizeText(text);
+  const knownPlaces = [
+    ["quan 1", "Quận 1, TP Hồ Chí Minh"],
+    ["q1", "Quận 1, TP Hồ Chí Minh"],
+    ["quan 3", "Quận 3, TP Hồ Chí Minh"],
+    ["q3", "Quận 3, TP Hồ Chí Minh"],
+    ["quan 7", "Quận 7, TP Hồ Chí Minh"],
+    ["q7", "Quận 7, TP Hồ Chí Minh"],
+    ["quan 12", "Quận 12, TP Hồ Chí Minh"],
+    ["q12", "Quận 12, TP Hồ Chí Minh"],
+    ["thu duc", "Thủ Đức, TP Hồ Chí Minh"],
+    ["binh thanh", "Bình Thạnh, TP Hồ Chí Minh"],
+    ["go vap", "Gò Vấp, TP Hồ Chí Minh"],
+    ["tan binh", "Tân Bình, TP Hồ Chí Minh"],
+    ["phu nhuan", "Phú Nhuận, TP Hồ Chí Minh"],
+    ["hcm", "TP Hồ Chí Minh"],
+    ["tphcm", "TP Hồ Chí Minh"],
+    ["ho chi minh", "TP Hồ Chí Minh"]
+  ];
+  const matchedPlace = knownPlaces.find(([key]) => normalized.includes(key));
+
+  if (matchedPlace) {
+    return matchedPlace[1];
+  }
+
+  const afterSuggestion = text.match(/(?:gợi ý|goi y|khu vực|khu vuc|ở|o|tại|tai)\s+(.+)$/i);
+
+  return afterSuggestion ? afterSuggestion[1].trim() : "";
+}
+
+function formatReminderDraftSummary(draft) {
+  return [
+    draft.title ? `Việc: ${draft.title}` : "",
+    draft.dueLocalTime && draft.dueDisplayDate ? `Thời gian: ${draft.dueLocalTime} ngày ${draft.dueDisplayDate}` : "",
+    draft.venue ? `Địa điểm/quán: ${draft.venue}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function saveReminderDraft(env, message, draft) {
+  if (!env.DB || !message.chat?.id) {
+    return;
+  }
+
+  const state = {
+    pending_reminder: {
+      ...draft,
+      dueAt: draft.dueAt instanceof Date ? draft.dueAt.toISOString() : draft.dueAt,
+      updated_at: new Date().toISOString()
+    }
+  };
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO conversation_state
+        (chat_id, chat_type, user_id, user_name, intent, topic, state_json, updated_at)
+       VALUES (?, ?, ?, ?, 'reminder_draft', 'reminder', ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(chat_id) DO UPDATE SET
+         chat_type = excluded.chat_type,
+         user_id = excluded.user_id,
+         user_name = excluded.user_name,
+         intent = excluded.intent,
+         topic = excluded.topic,
+         state_json = excluded.state_json,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+      .bind(
+        message.chat?.id || "",
+        message.chat?.chat_type || "",
+        message.from?.id || "",
+        message.from?.display_name || "",
+        JSON.stringify(state)
+      )
+      .run();
+  } catch (error) {
+    console.error("Failed to save reminder draft:", error);
+  }
+}
+
+async function clearReminderDraft(env, chatId) {
+  if (!env.DB || !chatId) {
+    return;
+  }
+
+  try {
+    await env.DB.prepare(
+      `DELETE FROM conversation_state
+       WHERE chat_id = ? AND intent = 'reminder_draft'`
+    )
+      .bind(chatId)
+      .run();
+  } catch (error) {
+    console.error("Failed to clear reminder draft:", error);
+  }
+}
+
 function parseReminderCommand(text, message, now = new Date()) {
   const cleanText = getCleanQuestion(text, message.chat?.title || "");
   const normalized = normalizeText(cleanText);
@@ -858,6 +1020,14 @@ function parseReminderCommand(text, message, now = new Date()) {
   }
 
   const timezone = DEFAULT_TIMEZONE;
+  const title = extractReminderTitle(cleanText);
+  const hasTime = hasReminderTime(cleanText);
+  const hasDate =
+    /\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/.test(normalized) ||
+    normalized.includes("ngay mai") ||
+    normalized.includes("mai") ||
+    normalized.includes("ngay kia") ||
+    /\bmốt\b/i.test(cleanText);
   const time = parseReminderTime(cleanText);
   let dateParts = parseReminderDate(cleanText, now, timezone);
   let dueAt = localDateTimeToUtc(dateParts, time, timezone);
@@ -867,15 +1037,32 @@ function parseReminderCommand(text, message, now = new Date()) {
     dueAt = localDateTimeToUtc(dateParts, time, timezone);
   }
 
-  return {
+  const parsed = {
     action: "create",
-    title: extractReminderTitle(cleanText),
+    title,
     dueAt,
     dueLocalDate: `${dateParts.year}-${String(dateParts.month).padStart(2, "0")}-${String(dateParts.day).padStart(2, "0")}`,
     dueLocalTime: time,
     dueDisplayDate: formatLocalDate(dateParts),
-    timezone
+    timezone,
+    hasTime,
+    hasDate,
+    needsVenue: isDiningReminder(cleanText) && !hasExplicitVenue(cleanText)
   };
+
+  if (isEmptyReminderTitle(title)) {
+    return { ...parsed, action: "ask_purpose", title: "" };
+  }
+
+  if (!hasTime) {
+    return { ...parsed, action: "ask_time" };
+  }
+
+  if (parsed.needsVenue) {
+    return { ...parsed, action: "ask_venue" };
+  }
+
+  return parsed;
 }
 
 async function saveReminder(env, message, parsed) {
@@ -918,6 +1105,137 @@ async function saveReminder(env, message, parsed) {
   ].join("\n");
 }
 
+async function suggestDiningVenues(env, message, draft, area) {
+  const searchArea = area || "";
+
+  if (!searchArea) {
+    await saveReminderDraft(env, message, draft);
+    return [
+      "Chưa có quán thì mình cần thêm khu vực để gợi ý cho đúng.",
+      "Bạn nhắn kiểu: chưa có, gợi ý Quận 1 ngân sách 300k/người."
+    ].join("\n");
+  }
+
+  const query = `Gợi ý quán ăn/quán nhậu phù hợp cho lịch "${draft.title}" ở ${searchArea}, ưu tiên địa điểm còn hoạt động, dễ đi, có review tốt.`;
+
+  try {
+    const result = await searchWeb(env, query, message);
+    await saveSearch(env, message, query, result.answer, result.sources);
+    await saveReminderDraft(env, message, { ...draft, suggestedArea: searchArea });
+
+    return [
+      result.answer || `Mình chưa tìm được quán phù hợp ở ${searchArea}.`,
+      "",
+      "Khi chốt quán, nhắn: có rồi, quán <tên quán/địa chỉ>."
+    ].join("\n");
+  } catch (error) {
+    console.error("Venue suggestion failed:", error);
+    await saveReminderDraft(env, message, { ...draft, suggestedArea: searchArea });
+
+    return [
+      `Mình ghi nhận cần gợi ý quán ở ${searchArea}, nhưng web search/Gemini đang lỗi hoặc hết quota.`,
+      "Bạn có thể nhắn tên quán sau: có rồi, quán <tên quán/địa chỉ>."
+    ].join("\n");
+  }
+}
+
+async function handleReminderDraftFollowUp(env, message, text) {
+  const state = await getConversationState(env, message.chat?.id || "");
+  const draft = state?.pending_reminder;
+
+  if (!draft) {
+    return null;
+  }
+
+  const cleanText = getCleanQuestion(text, message.chat?.title || "");
+  const normalized = normalizeText(cleanText);
+
+  if (normalized.includes("huy") || normalized.includes("bo qua") || normalized.includes("cancel")) {
+    await clearReminderDraft(env, message.chat?.id || "");
+    return "Đã hủy nháp lịch hẹn.";
+  }
+
+  if (draft.waitingFor === "purpose") {
+    const title = extractReminderTitle(cleanText);
+
+    if (isEmptyReminderTitle(title)) {
+      return "Bạn muốn lên lịch việc gì? Ví dụ: hẹn công ty nhậu, họp team, nộp tiền phòng.";
+    }
+
+    const nextDraft = { ...draft, title, needsVenue: isDiningReminder(title) };
+
+    if (nextDraft.needsVenue) {
+      await saveReminderDraft(env, message, { ...nextDraft, waitingFor: "venue" });
+      return [
+        `Mình hiểu lịch này là: ${title}.`,
+        "Bạn có quán/địa điểm chưa? Nếu chưa, nhắn khu vực để mình gợi ý."
+      ].join("\n");
+    }
+
+    if (draft.hasTime && draft.dueLocalTime && draft.dueAt) {
+      const reminderReply = await saveReminder(env, message, {
+        ...nextDraft,
+        dueAt: new Date(draft.dueAt)
+      });
+      await clearReminderDraft(env, message.chat?.id || "");
+      return reminderReply;
+    }
+
+    await saveReminderDraft(env, message, { ...nextDraft, waitingFor: "time" });
+    return "Bạn muốn nhắc lúc mấy giờ/ngày nào? Ví dụ: mai 9h.";
+  }
+
+  if (draft.waitingFor === "time") {
+    if (!hasReminderTime(cleanText)) {
+      return "Mình chưa thấy giờ nhắc. Bạn nhắn kiểu: mai 9h hoặc 25/8 14h.";
+    }
+
+    const parsed = parseReminderCommand(`lên lịch ${cleanText} ${draft.title}`, message);
+    const completedDraft = {
+      ...draft,
+      ...parsed,
+      title: draft.title,
+      dueAt: parsed.dueAt
+    };
+
+    if (isDiningReminder(completedDraft.title) && !hasExplicitVenue(cleanText)) {
+      await saveReminderDraft(env, message, { ...completedDraft, waitingFor: "venue" });
+      return [
+        "Mình đã bắt được thời gian.",
+        formatReminderDraftSummary(completedDraft),
+        "",
+        "Việc này có vẻ là ăn uống/nhậu. Bạn có quán chưa?"
+      ].join("\n");
+    }
+
+    const reminderReply = await saveReminder(env, message, {
+      ...completedDraft
+    });
+    await clearReminderDraft(env, message.chat?.id || "");
+    return reminderReply;
+  }
+
+  if (draft.waitingFor === "venue") {
+    if (isNegativeVenueAnswer(cleanText)) {
+      return suggestDiningVenues(env, message, draft, extractRecommendationArea(cleanText));
+    }
+
+    const venue = cleanText
+      .replace(/^(có rồi|co roi|quán|quan|ở|o|tại|tai)[,:\s]+/i, "")
+      .replace(/^(quán|quan|ở|o|tại|tai)[,:\s]+/i, "")
+      .trim();
+    const reminderReply = await saveReminder(env, message, {
+      ...draft,
+      title: venue ? `${draft.title} tại ${venue}` : draft.title,
+      dueAt: new Date(draft.dueAt)
+    });
+    await clearReminderDraft(env, message.chat?.id || "");
+    return reminderReply;
+  }
+
+  return null;
+}
+
 async function getUpcomingReminders(env, chatId, limit = 10) {
   if (!env.DB || !chatId) {
     return [];
@@ -958,6 +1276,12 @@ function formatUpcomingReminders(reminders) {
 }
 
 async function handleReminderCommand(env, message, text) {
+  const draftReply = await handleReminderDraftFollowUp(env, message, text);
+
+  if (draftReply) {
+    return draftReply;
+  }
+
   const parsed = parseReminderCommand(text, message);
 
   if (!parsed) {
@@ -966,6 +1290,38 @@ async function handleReminderCommand(env, message, text) {
 
   if (parsed.action === "list") {
     return formatUpcomingReminders(await getUpcomingReminders(env, message.chat?.id || ""));
+  }
+
+  if (parsed.action === "ask_purpose") {
+    await saveReminderDraft(env, message, { ...parsed, waitingFor: "purpose" });
+    return [
+      "Bạn muốn lên lịch việc gì?",
+      parsed.hasTime && parsed.dueLocalTime && parsed.dueDisplayDate
+        ? `Mình đã bắt được thời gian: ${parsed.dueLocalTime} ngày ${parsed.dueDisplayDate}.`
+        : "",
+      "Ví dụ: hẹn công ty nhậu, họp team, nộp tiền phòng."
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (parsed.action === "ask_time") {
+    await saveReminderDraft(env, message, { ...parsed, waitingFor: "time" });
+    return [
+      `Mình hiểu việc cần nhắc: ${parsed.title}.`,
+      "Bạn muốn nhắc lúc mấy giờ/ngày nào? Ví dụ: mai 9h hoặc 25/8 14h."
+    ].join("\n");
+  }
+
+  if (parsed.action === "ask_venue") {
+    await saveReminderDraft(env, message, { ...parsed, waitingFor: "venue" });
+    return [
+      "Mình đang tạo lịch này:",
+      formatReminderDraftSummary(parsed),
+      "",
+      "Việc này có vẻ là ăn uống/nhậu. Bạn có quán chưa?",
+      "Nếu chưa, nhắn: chưa có, gợi ý Quận 1 ngân sách 300k/người."
+    ].join("\n");
   }
 
   return saveReminder(env, message, parsed);
