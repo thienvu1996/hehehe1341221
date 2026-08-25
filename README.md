@@ -153,6 +153,16 @@ Vi du trong group:
 
 Mac dinh gio luu se duoc lam tron len moc 15 phut gan nhat de khop cron, vi du 6h10 thanh 06:15.
 Endpoint admin `/admin/send-daily-weather` van dung de test gui thoi tiet thu cong.
+
+Bot cung co lich hen mot lan cho tung chat/group:
+
+```text
+@Bot Thu Thap atess len lich mai 6h hen cong ty nhau
+@Bot Thu Thap atess nhac toi 25/8 14h nop tien phong
+@Bot Thu Thap atess xem lich
+```
+
+Neu cau hen co ngu canh toi/nhau/an toi ma ghi 6h, bot se hieu la 18:00.
 Moi lan bot goi Gemini, Worker se ghi usage vao D1 de dashboard xem so call, token va loi quota/429.
 Bot co them intent router: voi moi tin nhan khong phai link/lenh bao mat, bot doc tin moi,
 state cu va cac tin gan nhat de doan y dinh nhu weather, rental_search, context_summary,

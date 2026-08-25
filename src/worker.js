@@ -715,6 +715,262 @@ async function handleSettingsCommand(env, message, text) {
   return saveChatWeatherSettings(env, message, parsed);
 }
 
+function parseReminderTime(text) {
+  const match =
+    text.match(/\b(\d{1,2})\s*(?::|h|giờ|gio)\s*(\d{1,2})?\s*(am|pm|sáng|sang|chiều|chieu|tối|toi)?\b/i) ||
+    text.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+
+  if (!match) {
+    return "09:00";
+  }
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] && /^\d+$/.test(match[2]) ? match[2] : 0);
+  const meridiem = normalizeText(match[3] || match[2] || "");
+  const normalized = normalizeText(text);
+  const eveningContext =
+    normalized.includes("nhau") ||
+    normalized.includes("an toi") ||
+    normalized.includes("toi ") ||
+    normalized.includes("chieu") ||
+    normalized.includes("tan ca");
+
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 24 || minute < 0 || minute > 59) {
+    return "09:00";
+  }
+
+  if ((meridiem === "pm" || meridiem === "chieu" || meridiem === "toi" || eveningContext) && hour >= 1 && hour < 12) {
+    hour += 12;
+  } else if ((meridiem === "am" || meridiem === "sang") && hour === 12) {
+    hour = 0;
+  }
+
+  if (hour === 24) {
+    hour = 0;
+  }
+
+  return normalizeScheduleMinute(hour, minute);
+}
+
+function addDaysToDateParts(parts, days) {
+  const date = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + days));
+
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate()
+  };
+}
+
+function parseReminderDate(text, now = new Date(), timeZone = DEFAULT_TIMEZONE) {
+  const normalized = normalizeText(text);
+  const nowParts = getZonedDateTimeParts(now, timeZone);
+  const numericDate = normalized.match(/\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/);
+
+  if (numericDate) {
+    const day = Number(numericDate[1]);
+    const month = Number(numericDate[2]);
+    let year = numericDate[3] ? Number(numericDate[3]) : Number(nowParts.year);
+
+    if (year < 100) {
+      year += 2000;
+    }
+
+    return { year, month, day, explicit: true };
+  }
+
+  if (normalized.includes("ngay kia") || /\bmốt\b/i.test(text)) {
+    return { ...addDaysToDateParts(nowParts, 2), explicit: true };
+  }
+
+  if (normalized.includes("ngay mai") || normalized.includes("mai")) {
+    return { ...addDaysToDateParts(nowParts, 1), explicit: true };
+  }
+
+  return { year: Number(nowParts.year), month: Number(nowParts.month), day: Number(nowParts.day), explicit: false };
+}
+
+function getTimeZoneOffsetMinutes(date, timeZone = DEFAULT_TIMEZONE) {
+  const parts = getZonedDateTimeParts(date, timeZone);
+  const localAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute)
+  );
+
+  return Math.round((localAsUtc - date.getTime()) / 60000);
+}
+
+function localDateTimeToUtc(dateParts, time, timeZone = DEFAULT_TIMEZONE) {
+  const [hour, minute] = String(time || "09:00").split(":").map(Number);
+  const localAsUtc = Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, hour, minute, 0, 0);
+  let offset = getTimeZoneOffsetMinutes(new Date(localAsUtc), timeZone);
+  let utcTime = localAsUtc - offset * 60000;
+  offset = getTimeZoneOffsetMinutes(new Date(utcTime), timeZone);
+  utcTime = localAsUtc - offset * 60000;
+
+  return new Date(utcTime);
+}
+
+function formatLocalDate(dateParts) {
+  return `${String(dateParts.day).padStart(2, "0")}/${String(dateParts.month).padStart(2, "0")}/${dateParts.year}`;
+}
+
+function extractReminderTitle(text) {
+  const cleanText = text
+    .replace(/\b(lên lịch|len lich|đặt lịch|dat lich|nhắc tôi|nhac toi|nhắc mình|nhac minh|remind me)\b/gi, " ")
+    .replace(/\b(ngày mai|ngay mai|ngày kia|ngay kia|hôm nay|hom nay|tối nay|toi nay|chiều nay|chieu nay|sáng nay|sang nay|mai|mốt)\b/gi, " ")
+    .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/gi, " ")
+    .replace(/\b(?:lúc|luc|vào|vao)?\s*\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm|sáng|sang|chiều|chieu|tối|toi)?\b/gi, " ")
+    .replace(/\b\d{1,2}\s*(?:am|pm)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleanText || "việc đã hẹn";
+}
+
+function parseReminderCommand(text, message, now = new Date()) {
+  const cleanText = getCleanQuestion(text, message.chat?.title || "");
+  const normalized = normalizeText(cleanText);
+  const wantsList =
+    normalized.includes("xem lich") ||
+    normalized.includes("lich hen") ||
+    normalized.includes("lich sap toi") ||
+    normalized.includes("co lich gi");
+
+  if (wantsList && !normalized.includes("thoi tiet")) {
+    return { action: "list" };
+  }
+
+  const wantsReminder =
+    normalized.includes("len lich") ||
+    normalized.includes("dat lich") ||
+    normalized.includes("nhac toi") ||
+    normalized.includes("nhac minh") ||
+    normalized.includes("remind me") ||
+    normalized.startsWith("hen ") ||
+    normalized.includes(" hen ");
+
+  if (!wantsReminder || normalized.includes("thoi tiet")) {
+    return null;
+  }
+
+  const timezone = DEFAULT_TIMEZONE;
+  const time = parseReminderTime(cleanText);
+  let dateParts = parseReminderDate(cleanText, now, timezone);
+  let dueAt = localDateTimeToUtc(dateParts, time, timezone);
+
+  if (!dateParts.explicit && dueAt.getTime() <= now.getTime()) {
+    dateParts = { ...addDaysToDateParts(getZonedDateTimeParts(now, timezone), 1), explicit: false };
+    dueAt = localDateTimeToUtc(dateParts, time, timezone);
+  }
+
+  return {
+    action: "create",
+    title: extractReminderTitle(cleanText),
+    dueAt,
+    dueLocalDate: `${dateParts.year}-${String(dateParts.month).padStart(2, "0")}-${String(dateParts.day).padStart(2, "0")}`,
+    dueLocalTime: time,
+    dueDisplayDate: formatLocalDate(dateParts),
+    timezone
+  };
+}
+
+async function saveReminder(env, message, parsed) {
+  if (!env.DB || !message.chat?.id) {
+    return "Chưa cấu hình database nên chưa lưu được lịch hẹn.";
+  }
+
+  const id = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO reminders
+      (id, chat_id, chat_type, chat_title, user_id, user_name, title, due_at_utc,
+       due_local_date, due_local_time, timezone, status, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`
+  )
+    .bind(
+      id,
+      message.chat?.id || "",
+      message.chat?.chat_type || "",
+      message.chat?.title || "",
+      message.from?.id || "",
+      message.from?.display_name || "",
+      redactSensitiveText(parsed.title),
+      parsed.dueAt.toISOString(),
+      parsed.dueLocalDate,
+      parsed.dueLocalTime,
+      parsed.timezone,
+      JSON.stringify({
+        source_text: redactSensitiveText(getMessageText(message)),
+        captured_at: new Date().toISOString()
+      })
+    )
+    .run();
+
+  return [
+    "Đã lên lịch nhắc.",
+    `Việc: ${parsed.title}`,
+    `Thời gian: ${parsed.dueLocalTime} ngày ${parsed.dueDisplayDate}`,
+    "Tới giờ bot sẽ nhắc trong chat/group này."
+  ].join("\n");
+}
+
+async function getUpcomingReminders(env, chatId, limit = 10) {
+  if (!env.DB || !chatId) {
+    return [];
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT id, title, due_local_date, due_local_time, timezone, user_name
+       FROM reminders
+       WHERE chat_id = ? AND status = 'pending'
+       ORDER BY due_at_utc ASC
+       LIMIT ?`
+    )
+      .bind(chatId, limit)
+      .all();
+
+    return result.results || [];
+  } catch (error) {
+    console.error("Failed to list reminders:", error);
+    return [];
+  }
+}
+
+function formatUpcomingReminders(reminders) {
+  if (reminders.length === 0) {
+    return "Chat/group này chưa có lịch hẹn nào sắp tới.";
+  }
+
+  const lines = reminders.map((reminder, index) => {
+    const dateParts = String(reminder.due_local_date || "").split("-");
+    const displayDate =
+      dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : reminder.due_local_date || "chưa rõ ngày";
+
+    return `${index + 1}. ${reminder.due_local_time || "??:??"} ${displayDate}: ${reminder.title}`;
+  });
+
+  return `Lịch hẹn sắp tới:\n${lines.join("\n")}`;
+}
+
+async function handleReminderCommand(env, message, text) {
+  const parsed = parseReminderCommand(text, message);
+
+  if (!parsed) {
+    return null;
+  }
+
+  if (parsed.action === "list") {
+    return formatUpcomingReminders(await getUpcomingReminders(env, message.chat?.id || ""));
+  }
+
+  return saveReminder(env, message, parsed);
+}
+
 function buildMessageMetadata(message, eventName = "message.received") {
   const text = redactSensitiveText(getMessageText(message));
   const urlItems = extractMessageUrlItems(message);
@@ -2103,6 +2359,8 @@ function getHelpText() {
     "- Hỏi: thời tiết hôm nay sao?",
     "- Cài lịch thời tiết: @Bot Thu Thập atess cài gửi thời tiết 6h HCM",
     "- Xem/tắt lịch: @Bot Thu Thập atess xem cài đặt / tắt thời tiết",
+    "- Lên lịch nhắc việc: @Bot Thu Thập atess lên lịch mai 6h hẹn công ty nhậu",
+    "- Xem lịch hẹn: @Bot Thu Thập atess xem lịch",
     "- Hỏi tự nhiên như: cái này là gì / nên làm sao / tóm tắt giúp",
     "- Gửi ảnh bản đồ kèm caption: Tâm Ga Bình Triệu, bán kính 2km, tìm nhà dưới 10tr",
     "- Hỏi: tìm phòng dưới 5 triệu / quận 7 / gần trường..."
@@ -2255,6 +2513,12 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
 
   if (settingsReply) {
     return settingsReply;
+  }
+
+  const reminderReply = await handleReminderCommand(env, message, text);
+
+  if (reminderReply) {
+    return reminderReply;
   }
 
   if (urls.length > 0) {
@@ -2632,6 +2896,11 @@ function getZonedDateTimeParts(date = new Date(), timeZone = DEFAULT_TIMEZONE) {
   const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
 
   return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
     date: `${parts.year}-${parts.month}-${parts.day}`,
     time: `${parts.hour}:${parts.minute}`,
     totalMinutes: Number(parts.hour) * 60 + Number(parts.minute)
@@ -2741,6 +3010,91 @@ async function sendDueWeatherSchedules(env, options = {}) {
     ok: results.some((result) => result.ok),
     checked: settings.length,
     due: dueSettings.length,
+    sent: results.filter((result) => result.ok).length,
+    results
+  };
+}
+
+async function getDueReminders(env, nowDate = new Date()) {
+  if (!env.DB) {
+    return [];
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT id, chat_id, chat_type, chat_title, user_id, user_name, title,
+              due_at_utc, due_local_date, due_local_time, timezone
+       FROM reminders
+       WHERE status = 'pending' AND due_at_utc <= ?
+       ORDER BY due_at_utc ASC
+       LIMIT 25`
+    )
+      .bind(nowDate.toISOString())
+      .all();
+
+    return result.results || [];
+  } catch (error) {
+    console.error("Failed to load due reminders:", error);
+    return [];
+  }
+}
+
+async function markReminderSent(env, reminderId) {
+  if (!env.DB || !reminderId) {
+    return;
+  }
+
+  try {
+    await env.DB.prepare(
+      `UPDATE reminders
+       SET status = 'sent', sent_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+      .bind(reminderId)
+      .run();
+  } catch (error) {
+    console.error("Failed to mark reminder sent:", error);
+  }
+}
+
+function formatReminderMessage(reminder) {
+  const dateParts = String(reminder.due_local_date || "").split("-");
+  const displayDate =
+    dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : reminder.due_local_date || "hôm nay";
+  const userName = reminder.user_name ? ` của ${reminder.user_name}` : "";
+
+  return [
+    `Nhắc lịch${userName}:`,
+    `${reminder.due_local_time || ""} ngày ${displayDate}`,
+    reminder.title || "Việc đã hẹn"
+  ].join("\n");
+}
+
+async function sendDueReminders(env, options = {}) {
+  const nowDate = new Date(options.scheduledTime || Date.now());
+  const dueReminders = await getDueReminders(env, nowDate);
+  const results = [];
+
+  for (const reminder of dueReminders) {
+    try {
+      await sendChatAction(env, reminder.chat_id, "typing");
+      await sendMessage(env, reminder.chat_id, formatReminderMessage(reminder));
+      await markReminderSent(env, reminder.id);
+      results.push({ id: reminder.id, chat_id: reminder.chat_id, ok: true });
+    } catch (error) {
+      console.error("Failed to send reminder:", error);
+      results.push({
+        id: reminder.id,
+        chat_id: reminder.chat_id,
+        ok: false,
+        error: String(error?.message || error)
+      });
+    }
+  }
+
+  return {
+    ok: results.some((result) => result.ok),
+    due: dueReminders.length,
     sent: results.filter((result) => result.ok).length,
     results
   };
@@ -3100,9 +3454,14 @@ export default {
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
-      sendDueWeatherSchedules(env, { scheduledTime: event.scheduledTime }).catch((error) => {
-        console.error("Scheduled weather settings failed:", error);
-      })
+      Promise.all([
+        sendDueWeatherSchedules(env, { scheduledTime: event.scheduledTime }).catch((error) => {
+          console.error("Scheduled weather settings failed:", error);
+        }),
+        sendDueReminders(env, { scheduledTime: event.scheduledTime }).catch((error) => {
+          console.error("Scheduled reminders failed:", error);
+        })
+      ])
     );
   }
 };
