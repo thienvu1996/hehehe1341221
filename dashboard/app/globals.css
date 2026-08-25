@@ -212,11 +212,18 @@ h3 {
 
 .stat-label,
 .muted,
+.meta-line,
 .record-kicker,
 .message-meta span,
 time {
   color: var(--muted);
   font-size: 13px;
+}
+
+.meta-line {
+  margin-bottom: 8px;
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 
 .stat-label {

@@ -117,10 +117,16 @@ Vi du:
 @Bot Thu Thap atess https://example.com/can-ho-123 nha nay 5tr quan 7
 @Bot Thu Thap atess hom nay co link nao?
 @Bot Thu Thap atess link nao loi?
+@Bot Thu Thap atess co thong tin trong nhom chua?
+@Bot Thu Thap atess tong hop du lieu hien tai
 @Bot Thu Thap atess tim phong duoi 5 trieu
 @Bot Thu Thap atess tim nha duoi 10tr gan Ga Binh Trieu tren google
 @Bot Thu Thap atess help
 ```
+
+Bot luu them `metadata_json` cho tin nhan, link, search va anh. Metadata gom event Zalo,
+chat id/type/title, nguoi gui, message id/date, so URL trich xuat va thoi diem bot ghi nhan.
+Khi hoi thong tin tong quat, bot dung metadata va du lieu gan nhat trong group hien tai de tra loi.
 
 ## Anh ban do va Google Search
 

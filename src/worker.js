@@ -58,6 +58,13 @@ function getReplyText(message) {
   return `Ban vua gui: ${text}`;
 }
 
+function redactSensitiveText(text) {
+  return String(text || "")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[REDACTED_GEMINI_KEY]")
+    .replace(/\b\d{8,}:[0-9A-Za-z_-]{20,}\b/g, "[REDACTED_ZALO_TOKEN]")
+    .replace(/(token|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]");
+}
+
 function limitText(text, maxLength = MAX_ZALO_TEXT_LENGTH) {
   const value = String(text || "").trim();
 
@@ -66,6 +73,14 @@ function limitText(text, maxLength = MAX_ZALO_TEXT_LENGTH) {
   }
 
   return `${value.slice(0, maxLength - 20).trim()}...`;
+}
+
+function safeJsonParse(value, fallback = {}) {
+  try {
+    return JSON.parse(value || "");
+  } catch {
+    return fallback;
+  }
 }
 
 function normalizeText(text) {
@@ -120,6 +135,56 @@ function isRentalQuestion(text) {
     normalized.includes("10tr") ||
     /\b\d+\s*tr\b/.test(normalized)
   );
+}
+
+function isContextQuestion(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes("thong tin") ||
+    normalized.includes("du lieu") ||
+    normalized.includes("metadata") ||
+    normalized.includes("meta data") ||
+    normalized.includes("nhom") ||
+    normalized.includes("da luu") ||
+    normalized.includes("co gi") ||
+    normalized.includes("tong hop") ||
+    normalized.includes("bao cao") ||
+    normalized.includes("dashboard") ||
+    normalized.includes("bot biet gi") ||
+    normalized.includes("hien tai")
+  );
+}
+
+function buildMessageMetadata(message, eventName = "message.received") {
+  const text = redactSensitiveText(getMessageText(message));
+  const urls = extractUrls(text);
+
+  return {
+    event_name: eventName,
+    chat: {
+      id: message.chat?.id || "",
+      type: message.chat?.chat_type || "",
+      title: message.chat?.title || ""
+    },
+    sender: {
+      id: message.from?.id || "",
+      name: message.from?.display_name || ""
+    },
+    message: {
+      id: message.message_id || "",
+      date: message.date || null,
+      has_text: Boolean(message.text),
+      has_caption: Boolean(message.caption),
+      has_photo: Boolean(message.photo),
+      url_count: urls.length,
+      text_length: text.length
+    },
+    extracted: {
+      urls
+    },
+    captured_at: new Date().toISOString()
+  };
 }
 
 function wantsWebSearch(text) {
@@ -344,16 +409,17 @@ async function saveSearch(env, message, query, answer, sources) {
   }
 
   await env.DB.prepare(
-    `INSERT INTO searches (chat_id, user_id, user_name, query, answer, sources_json)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO searches (chat_id, user_id, user_name, query, answer, sources_json, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       message.chat?.id || "",
       message.from?.id || "",
       message.from?.display_name || "",
-      query,
-      answer,
-      JSON.stringify(sources || [])
+      redactSensitiveText(query),
+      redactSensitiveText(answer),
+      JSON.stringify(sources || []),
+      JSON.stringify(buildMessageMetadata(message, "search.created"))
     )
     .run();
 }
@@ -402,15 +468,15 @@ Noi dung trang: ${urlInfo.plainText}
   }
 }
 
-async function saveMessage(env, message) {
+async function saveMessage(env, message, eventName = "message.text.received") {
   if (!env.DB) {
     return;
   }
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO messages
-      (chat_id, chat_type, user_id, user_name, message_id, text, message_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+      (chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       message.chat?.id || "",
@@ -418,8 +484,9 @@ async function saveMessage(env, message) {
       message.from?.id || "",
       message.from?.display_name || "",
       message.message_id || null,
-      message.text || "",
-      message.date || null
+      redactSensitiveText(message.text || message.caption || ""),
+      message.date || null,
+      JSON.stringify(buildMessageMetadata(message, eventName))
     )
     .run();
 }
@@ -428,8 +495,8 @@ async function saveLink(env, message, url, urlInfo, summaryInfo) {
   await env.DB.prepare(
     `INSERT INTO links
       (chat_id, chat_type, user_id, user_name, message_id, url, source_text, title, description,
-       summary, price_text, area_text, status, http_status, last_checked_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       summary, price_text, area_text, status, http_status, metadata_json, last_checked_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
      ON CONFLICT(chat_id, url) DO UPDATE SET
        source_text = excluded.source_text,
        title = excluded.title,
@@ -439,6 +506,7 @@ async function saveLink(env, message, url, urlInfo, summaryInfo) {
        area_text = excluded.area_text,
        status = excluded.status,
        http_status = excluded.http_status,
+       metadata_json = excluded.metadata_json,
        last_checked_at = CURRENT_TIMESTAMP,
        updated_at = CURRENT_TIMESTAMP`
   )
@@ -449,14 +517,19 @@ async function saveLink(env, message, url, urlInfo, summaryInfo) {
       message.from?.display_name || "",
       message.message_id || null,
       url,
-      message.text || "",
+      redactSensitiveText(message.text || message.caption || ""),
       urlInfo.title || "",
       urlInfo.description || "",
-      summaryInfo.summary || "",
-      summaryInfo.priceText || "",
-      summaryInfo.areaText || "",
+      redactSensitiveText(summaryInfo.summary || ""),
+      redactSensitiveText(summaryInfo.priceText || ""),
+      redactSensitiveText(summaryInfo.areaText || ""),
       urlInfo.status,
-      urlInfo.httpStatus
+      urlInfo.httpStatus,
+      JSON.stringify({
+        ...buildMessageMetadata(message, "link.saved"),
+        url_status: urlInfo.status,
+        http_status: urlInfo.httpStatus
+      })
     )
     .run();
 }
@@ -502,6 +575,157 @@ function formatLinkList(links) {
     .join("\n\n");
 }
 
+async function getChatContext(env, chatId) {
+  const [countsResult, messagesResult, linksResult, searchesResult, imagesResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT 'messages' AS name, COUNT(*) AS total FROM messages WHERE chat_id = ?
+       UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links WHERE chat_id = ?
+       UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches WHERE chat_id = ?
+       UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images WHERE chat_id = ?`
+    )
+      .bind(chatId, chatId, chatId, chatId)
+      .all(),
+    env.DB.prepare(
+      `SELECT user_name, text, created_at, metadata_json
+       FROM messages
+       WHERE chat_id = ?
+       ORDER BY datetime(created_at) DESC
+       LIMIT 12`
+    )
+      .bind(chatId)
+      .all(),
+    env.DB.prepare(
+      `SELECT url, title, summary, price_text, area_text, status, http_status, created_at, updated_at, metadata_json
+       FROM links
+       WHERE chat_id = ?
+       ORDER BY datetime(updated_at) DESC
+       LIMIT 12`
+    )
+      .bind(chatId)
+      .all(),
+    env.DB.prepare(
+      `SELECT query, answer, sources_json, created_at, metadata_json
+       FROM searches
+       WHERE chat_id = ?
+       ORDER BY datetime(created_at) DESC
+       LIMIT 8`
+    )
+      .bind(chatId)
+      .all(),
+    env.DB.prepare(
+      `SELECT caption, analysis, created_at, metadata_json
+       FROM images
+       WHERE chat_id = ?
+       ORDER BY datetime(created_at) DESC
+       LIMIT 8`
+    )
+      .bind(chatId)
+      .all()
+  ]);
+  const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
+
+  return {
+    counts: {
+      messages: counts.messages || 0,
+      links: counts.links || 0,
+      searches: counts.searches || 0,
+      images: counts.images || 0
+    },
+    messages: messagesResult.results || [],
+    links: linksResult.results || [],
+    searches: (searchesResult.results || []).map((row) => ({
+      ...row,
+      sources: safeJsonParse(row.sources_json, [])
+    })),
+    images: imagesResult.results || []
+  };
+}
+
+function formatChatContextFallback(context) {
+  const lines = [
+    `Trong nhom nay bot da luu: ${context.counts.messages} tin nhan, ${context.counts.links} link, ${context.counts.searches} cau search, ${context.counts.images} anh.`
+  ];
+
+  if (context.links.length > 0) {
+    lines.push(`\nLink gan nhat:\n${formatLinkList(context.links.slice(0, 5))}`);
+  } else {
+    lines.push("\nChua co link thue nha nao duoc luu trong nhom nay.");
+  }
+
+  if (context.images.length > 0) {
+    lines.push(
+      `\nAnh gan nhat:\n${context.images
+        .slice(0, 3)
+        .map((image, index) => `${index + 1}. ${image.caption || image.analysis || "Anh khong co caption"}`)
+        .join("\n")}`
+    );
+  }
+
+  return limitText(lines.join("\n"));
+}
+
+async function answerContextQuestion(env, message, question) {
+  const chatId = message.chat?.id || "";
+  const context = await getChatContext(env, chatId);
+
+  if (!env.GEMINI_API_KEY) {
+    return formatChatContextFallback(context);
+  }
+
+  const compactContext = {
+    counts: context.counts,
+    recent_messages: context.messages.map((row) => ({
+      user: row.user_name,
+      text: redactSensitiveText(row.text),
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_links: context.links.map((row) => ({
+      url: row.url,
+      title: row.title,
+      summary: row.summary,
+      price: row.price_text,
+      area: row.area_text,
+      status: row.status,
+      updated_at: row.updated_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_searches: context.searches.map((row) => ({
+      query: row.query,
+      answer: row.answer,
+      sources: row.sources,
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    })),
+    recent_images: context.images.map((row) => ({
+      caption: row.caption,
+      analysis: row.analysis,
+      at: row.created_at,
+      metadata: safeJsonParse(row.metadata_json)
+    }))
+  };
+  const prompt = `
+Ban la bot quan ly thong tin trong group Zalo hien tai.
+Tra loi ngan gon bang tieng Viet khong dau.
+Hay dua tren context da luu trong D1: messages, links, searches, images va metadata_json.
+Neu nguoi dung hoi co thong tin/du lieu trong nhom chua, hay noi ro so luong va tom tat nhung gi bot dang biet.
+Khong lap lai token, secret, api key, hay noi dung nhay cam neu thay trong context.
+Neu chua co du lieu, hay huong dan gui link/anh/cau hoi de bot thu thap.
+
+Cau hoi: ${question}
+
+Context JSON:
+${JSON.stringify(compactContext).slice(0, 14000)}
+`;
+
+  try {
+    return limitText(await askGemini(env, prompt));
+  } catch (error) {
+    console.error(error);
+    return formatChatContextFallback(context);
+  }
+}
+
 async function answerQuestion(env, message, question) {
   const chatId = message.chat?.id;
   const normalized = normalizeText(question);
@@ -516,8 +740,14 @@ async function answerQuestion(env, message, question) {
       "- Gui link thue nha: bot tu luu va tom tat.",
       "- Hoi: hom nay co link nao?",
       "- Hoi: link nao loi?",
+      "- Hoi: co thong tin trong nhom chua?",
+      "- Gui anh ban do kem caption: Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr",
       "- Hoi: tim phong duoi 5 trieu / quan 7 / gan truong..."
     ].join("\n");
+  }
+
+  if (isContextQuestion(question)) {
+    return answerContextQuestion(env, message, question);
   }
 
   if (normalized.includes("loi") || normalized.includes("hong") || normalized.includes("die")) {
@@ -579,11 +809,11 @@ ${context}
   return limitText(await askGemini(env, prompt));
 }
 
-async function processTextMessage(env, message) {
+async function processTextMessage(env, message, eventName = "message.text.received") {
   const text = getMessageText(message);
   const urls = extractUrls(text);
 
-  await saveMessage(env, message);
+  await saveMessage(env, message, eventName);
 
   if (!env.DB) {
     return getReplyText(message);
@@ -615,7 +845,7 @@ async function processTextMessage(env, message) {
   }
 
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
-  if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion)) {
+  if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion) || isContextQuestion(text) || isContextQuestion(cleanQuestion)) {
     return answerQuestion(env, message, cleanQuestion || text);
   }
 
@@ -636,9 +866,11 @@ function getImageMimeType(url = "") {
   return "image/jpeg";
 }
 
-async function analyzeImage(env, message) {
+async function analyzeImage(env, message, eventName = "message.image.received") {
   const photoUrl = message.photo;
   const caption = getMessageText(message);
+
+  await saveMessage(env, message, eventName);
 
   if (!photoUrl) {
     return "Khong thay URL anh trong webhook.";
@@ -687,12 +919,13 @@ Caption: ${caption}
 
   if (env.DB) {
     await env.DB.prepare(
-      `INSERT INTO images (chat_id, chat_type, user_id, user_name, message_id, photo_url, caption, analysis)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO images (chat_id, chat_type, user_id, user_name, message_id, photo_url, caption, analysis, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(chat_id, message_id) DO UPDATE SET
          photo_url = excluded.photo_url,
          caption = excluded.caption,
-         analysis = excluded.analysis`
+         analysis = excluded.analysis,
+         metadata_json = excluded.metadata_json`
     )
       .bind(
         message.chat?.id || "",
@@ -701,8 +934,9 @@ Caption: ${caption}
         message.from?.display_name || "",
         message.message_id || null,
         photoUrl,
-        caption,
-        answer
+        redactSensitiveText(caption),
+        redactSensitiveText(answer),
+        JSON.stringify(buildMessageMetadata(message, "image.analyzed"))
       )
       .run();
   }
@@ -761,7 +995,9 @@ async function handleWebhook(request, env) {
   if (["message.text.received", "message.image.received"].includes(eventName) && message?.chat?.id) {
     try {
       const reply =
-        eventName === "message.image.received" ? await analyzeImage(env, message) : await processTextMessage(env, message);
+        eventName === "message.image.received"
+          ? await analyzeImage(env, message, eventName)
+          : await processTextMessage(env, message, eventName);
       await sendMessage(env, message.chat.id, reply);
     } catch (error) {
       console.error(error);
@@ -821,26 +1057,26 @@ async function handleDashboardData(request, env) {
        UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images`
     ).all(),
     env.DB.prepare(
-      `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, created_at
+      `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json, created_at
        FROM messages
        ORDER BY datetime(created_at) DESC
        LIMIT 40`
     ).all(),
     env.DB.prepare(
       `SELECT id, chat_id, chat_type, user_name, message_id, url, source_text, title, description,
-              summary, price_text, area_text, status, http_status, last_checked_at, created_at, updated_at
+              summary, price_text, area_text, status, http_status, metadata_json, last_checked_at, created_at, updated_at
        FROM links
        ORDER BY datetime(updated_at) DESC
        LIMIT 60`
     ).all(),
     env.DB.prepare(
-      `SELECT id, chat_id, user_name, query, answer, sources_json, created_at
+      `SELECT id, chat_id, user_name, query, answer, sources_json, metadata_json, created_at
        FROM searches
        ORDER BY datetime(created_at) DESC
        LIMIT 30`
     ).all(),
     env.DB.prepare(
-      `SELECT id, chat_id, user_name, message_id, photo_url, caption, analysis, created_at
+      `SELECT id, chat_id, user_name, message_id, photo_url, caption, analysis, metadata_json, created_at
        FROM images
        ORDER BY datetime(created_at) DESC
        LIMIT 30`
@@ -858,13 +1094,23 @@ async function handleDashboardData(request, env) {
       images: counts.images || 0
     },
     recent: {
-      messages: messagesResult.results || [],
-      links: linksResult.results || [],
+      messages: (messagesResult.results || []).map((row) => ({
+        ...row,
+        metadata: safeJsonParse(row.metadata_json)
+      })),
+      links: (linksResult.results || []).map((row) => ({
+        ...row,
+        metadata: safeJsonParse(row.metadata_json)
+      })),
       searches: (searchesResult.results || []).map((row) => ({
         ...row,
-        sources: JSON.parse(row.sources_json || "[]")
+        sources: safeJsonParse(row.sources_json, []),
+        metadata: safeJsonParse(row.metadata_json)
       })),
-      images: imagesResult.results || []
+      images: (imagesResult.results || []).map((row) => ({
+        ...row,
+        metadata: safeJsonParse(row.metadata_json)
+      }))
     }
   });
 }

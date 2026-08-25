@@ -29,6 +29,7 @@ type MessageRow = {
   user_name: string;
   text: string;
   message_date?: number | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -44,6 +45,7 @@ type LinkRow = {
   area_text: string;
   status: string;
   http_status?: number | null;
+  metadata?: Record<string, unknown>;
   updated_at: string;
 };
 
@@ -53,6 +55,7 @@ type SearchRow = {
   query: string;
   answer: string;
   sources?: Array<{ title: string; url: string }>;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -62,6 +65,7 @@ type ImageRow = {
   photo_url: string;
   caption: string;
   analysis: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 
@@ -115,6 +119,14 @@ const normalize = (text: string) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+
+function getMetaLabel(metadata?: Record<string, unknown>) {
+  const eventName = typeof metadata?.event_name === "string" ? metadata.event_name : "";
+  const message = metadata?.message && typeof metadata.message === "object" ? (metadata.message as Record<string, unknown>) : {};
+  const urlCount = typeof message.url_count === "number" ? message.url_count : 0;
+
+  return [eventName, urlCount ? `${urlCount} url` : ""].filter(Boolean).join(" | ");
+}
 
 function StatTile({
   label,
@@ -230,6 +242,7 @@ function LinksTable({ links, query }: { links: LinkRow[]; query: string }) {
             <tr key={link.id}>
               <td>
                 <div className="table-title">{link.summary || link.title || "Link thue nha"}</div>
+                <div className="meta-line">{getMetaLabel(link.metadata)}</div>
                 <a href={link.url} target="_blank" rel="noreferrer" className="external-link">
                   {link.url}
                   <ExternalLink size={14} />
@@ -278,6 +291,7 @@ function SearchList({ searches, query }: { searches: SearchRow[]; query: string 
             <div>
               <p className="record-kicker">{row.user_name || "Nguoi dung"} hoi</p>
               <h3>{row.query}</h3>
+              <div className="meta-line">{getMetaLabel(row.metadata)}</div>
             </div>
             <time>{formatDate(row.created_at)}</time>
           </div>
@@ -321,6 +335,7 @@ function ImageList({ images, query }: { images: ImageRow[]; query: string }) {
           <div>
             <p className="record-kicker">{row.user_name || "Nguoi dung"} gui anh</p>
             <h3>{row.caption || "Khong co caption"}</h3>
+            <div className="meta-line">{getMetaLabel(row.metadata)}</div>
             <p>{row.analysis || "Chua co phan tich."}</p>
             <time>{formatDate(row.created_at)}</time>
           </div>
@@ -357,6 +372,7 @@ function MessageList({ messages, query }: { messages: MessageRow[]; query: strin
               <strong>{row.user_name || "Nguoi dung"}</strong>
               <span>{formatDate(row.created_at || row.message_date)}</span>
             </div>
+            <div className="meta-line">{getMetaLabel(row.metadata)}</div>
             <p>{row.text || "Tin nhan khong co text"}</p>
           </div>
         </article>
