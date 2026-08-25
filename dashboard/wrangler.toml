@@ -1,0 +1,13 @@
+name = "hehehe1341221-dashboard"
+main = "worker.js"
+compatibility_date = "2026-08-25"
+workers_dev = true
+
+[[routes]]
+pattern = "dashboard.jean1331.io.vn"
+custom_domain = true
+
+[assets]
+directory = "./out"
+binding = "ASSETS"
+not_found_handling = "single-page-application"

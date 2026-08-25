@@ -5,13 +5,30 @@ const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
 
-function json(data, status = 200) {
+function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      "Content-Type": "application/json; charset=utf-8"
+      "Content-Type": "application/json; charset=utf-8",
+      ...headers
     }
   });
+}
+
+function getDashboardCorsHeaders(request) {
+  const origin = request.headers.get("Origin") || "*";
+
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Dashboard-Token, X-Bot-Api-Secret-Token",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin"
+  };
+}
+
+function dashboardJson(request, data, status = 200) {
+  return json(data, status, getDashboardCorsHeaders(request));
 }
 
 function constantTimeEqual(a = "", b = "") {
@@ -768,6 +785,90 @@ function authorizeAdminRequest(request, env) {
   return null;
 }
 
+function authorizeDashboardRequest(request, env) {
+  const expectedToken = env.DASHBOARD_TOKEN || env.WEBHOOK_SECRET_TOKEN;
+
+  if (!expectedToken) {
+    return json({ message: "Server is missing DASHBOARD_TOKEN" }, 500);
+  }
+
+  const token =
+    request.headers.get("x-dashboard-token") || request.headers.get("x-bot-api-secret-token") || "";
+
+  if (!constantTimeEqual(token, expectedToken)) {
+    return json({ message: "Unauthorized" }, 403);
+  }
+
+  return null;
+}
+
+async function handleDashboardData(request, env) {
+  const unauthorizedResponse = authorizeDashboardRequest(request, env);
+
+  if (unauthorizedResponse) {
+    return dashboardJson(request, await unauthorizedResponse.json(), unauthorizedResponse.status);
+  }
+
+  if (!env.DB) {
+    return dashboardJson(request, { ok: false, message: "Cloudflare D1 is not configured" }, 500);
+  }
+
+  const [countsResult, messagesResult, linksResult, searchesResult, imagesResult] = await Promise.all([
+    env.DB.prepare(
+      `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
+       UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links
+       UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches
+       UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, created_at
+       FROM messages
+       ORDER BY datetime(created_at) DESC
+       LIMIT 40`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, chat_id, chat_type, user_name, message_id, url, source_text, title, description,
+              summary, price_text, area_text, status, http_status, last_checked_at, created_at, updated_at
+       FROM links
+       ORDER BY datetime(updated_at) DESC
+       LIMIT 60`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, chat_id, user_name, query, answer, sources_json, created_at
+       FROM searches
+       ORDER BY datetime(created_at) DESC
+       LIMIT 30`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, chat_id, user_name, message_id, photo_url, caption, analysis, created_at
+       FROM images
+       ORDER BY datetime(created_at) DESC
+       LIMIT 30`
+    ).all()
+  ]);
+  const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
+
+  return dashboardJson(request, {
+    ok: true,
+    generated_at: new Date().toISOString(),
+    counts: {
+      messages: counts.messages || 0,
+      links: counts.links || 0,
+      searches: counts.searches || 0,
+      images: counts.images || 0
+    },
+    recent: {
+      messages: messagesResult.results || [],
+      links: linksResult.results || [],
+      searches: (searchesResult.results || []).map((row) => ({
+        ...row,
+        sources: JSON.parse(row.sources_json || "[]")
+      })),
+      images: imagesResult.results || []
+    }
+  });
+}
+
 async function handleRegisterWebhook(request, env) {
   const unauthorizedResponse = authorizeAdminRequest(request, env);
 
@@ -823,6 +924,17 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
       return handleTestWebhook(request, env);
+    }
+
+    if (request.method === "OPTIONS" && url.pathname === "/admin/dashboard-data") {
+      return new Response(null, {
+        status: 204,
+        headers: getDashboardCorsHeaders(request)
+      });
+    }
+
+    if (request.method === "GET" && url.pathname === "/admin/dashboard-data") {
+      return handleDashboardData(request, env);
     }
 
     return json({ message: "Not Found" }, 404);

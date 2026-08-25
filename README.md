@@ -19,9 +19,11 @@ Set secrets cho Worker:
 npx wrangler secret put ZALO_BOT_TOKEN
 npx wrangler secret put WEBHOOK_SECRET_TOKEN
 npx wrangler secret put GEMINI_API_KEY
+npx wrangler secret put DASHBOARD_TOKEN
 ```
 
 `GEMINI_API_KEY` la tuy chon. Neu chua set, bot van luu link vao D1 nhung chua tom tat/tra loi thong minh bang Gemini.
+`DASHBOARD_TOKEN` dung de bao ve API dashboard doc du lieu tu D1.
 
 Deploy:
 
@@ -131,3 +133,30 @@ Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr tren google
 
 Bot se doc dia danh/vung khoanh trong anh bang Gemini Vision. Neu caption co yeu cau tim kiem, bot se thu dung Gemini Google Search de tim tren web.
 Neu Google Search het quota, bot van luu/phan tich anh nhung se bao chua search web duoc.
+
+## Web dashboard Next.js
+
+Dashboard doc du lieu tu endpoint Worker `GET /admin/dashboard-data` va yeu cau `DASHBOARD_TOKEN`.
+
+URL dang deploy:
+
+```text
+https://dashboard.jean1331.io.vn
+https://hehehe1341221-dashboard.vuthien616.workers.dev
+```
+
+Chay local:
+
+```bash
+cd dashboard
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Deploy dashboard:
+
+```bash
+cd dashboard
+npm run deploy
+```
