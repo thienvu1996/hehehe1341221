@@ -2233,6 +2233,22 @@ async function sendMessage(env, chatId, text) {
   });
 }
 
+async function sendChatAction(env, chatId, action = "typing") {
+  if (!env.ZALO_BOT_TOKEN || !chatId) {
+    return null;
+  }
+
+  try {
+    return await callZaloApi(env, "sendChatAction", {
+      chat_id: chatId,
+      action
+    });
+  } catch (error) {
+    console.error("Zalo sendChatAction failed:", error);
+    return null;
+  }
+}
+
 async function handleWebhook(request, env) {
   if (!env.WEBHOOK_SECRET_TOKEN) {
     return json({ message: "Server is missing WEBHOOK_SECRET_TOKEN" }, 500);
@@ -2253,6 +2269,7 @@ async function handleWebhook(request, env) {
 
   if (["message.text.received", "message.image.received"].includes(eventName) && message?.chat?.id) {
     try {
+      await sendChatAction(env, message.chat.id, "typing");
       const reply =
         eventName === "message.image.received"
           ? await analyzeImage(env, message, eventName)

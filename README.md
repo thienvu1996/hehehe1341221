@@ -140,6 +140,7 @@ Bot co them intent router: voi moi tin nhan khong phai link/lenh bao mat, bot do
 state cu va cac tin gan nhat de doan y dinh nhu weather, rental_search, context_summary,
 broken_links, help hoac general_chat. State nay duoc luu trong bang `conversation_state`
 de cac cau noi cut nhu "cai do sao", "roi sao", "o dau" van bam theo ngu canh chat hien tai.
+Truoc khi xu ly cau tra loi lau, bot goi `sendChatAction` voi action `typing` de Zalo hien trang thai dang nhap.
 
 Neu muon nhan rieng voi bot de hoi tong du lieu tat ca group/chat, set secret admin:
 
