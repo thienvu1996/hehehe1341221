@@ -161,6 +161,9 @@ Lenh nay chi hoat dong trong tin nhan rieng cua user id nam trong `OWNER_ZALO_US
 ## Anh ban do va Google Search
 
 Bot co the nhan anh tu Zalo qua event `message.image.received`.
+Webhook thuong gui URL anh (`photo_url`) chu khong gui binary/base64 truc tiep. Worker se tai URL anh,
+doi sang base64 tam thoi de gui Gemini Vision, nhung D1 chi luu URL, caption, analysis va metadata.
+Neu can luu file anh lau dai, nen them Cloudflare R2 thay vi nhet base64 vao D1.
 Neu gui anh ban do, nen kem caption ro dieu kien:
 
 ```text

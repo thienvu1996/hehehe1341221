@@ -5,6 +5,7 @@ const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
 const DASHBOARD_SESSION_TTL_SECONDS = 30 * 60;
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -188,6 +189,68 @@ function extractUrls(text) {
     .filter(Boolean);
 }
 
+function findUrlDeep(value, path = "", depth = 0) {
+  if (!value || depth > 5) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const match = value.match(/https?:\/\/[^\s<>"']+/i);
+
+    return match ? { url: match[0], source: path } : null;
+  }
+
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const found = findUrlDeep(value[index], `${path}[${index}]`, depth + 1);
+
+      if (found) {
+        return found;
+      }
+    }
+
+    return null;
+  }
+
+  if (typeof value === "object") {
+    for (const key of ["photo_url", "photo", "image_url", "media_url", "url", "href", "download_url", "thumbnail_url"]) {
+      const found = findUrlDeep(value[key], path ? `${path}.${key}` : key, depth + 1);
+
+      if (found) {
+        return found;
+      }
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      const lowerKey = key.toLowerCase();
+
+      if (!/(photo|image|media|file|attach|payload|url|href|thumb)/.test(lowerKey)) {
+        continue;
+      }
+
+      const found = findUrlDeep(child, path ? `${path}.${key}` : key, depth + 1);
+
+      if (found) {
+        return found;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractImageUrl(message) {
+  return (
+    findUrlDeep(message?.photo_url, "photo_url") ||
+    findUrlDeep(message?.photo, "photo") ||
+    findUrlDeep(message?.image_url, "image_url") ||
+    findUrlDeep(message?.media, "media") ||
+    findUrlDeep(message?.attachment, "attachment") ||
+    findUrlDeep(message?.attachments, "attachments") ||
+    findUrlDeep(message, "message")
+  );
+}
+
 function getMessageText(message) {
   return String(message?.text || message?.caption || "").trim();
 }
@@ -328,6 +391,7 @@ function answerDashboardKey(env, message) {
 function buildMessageMetadata(message, eventName = "message.received") {
   const text = redactSensitiveText(getMessageText(message));
   const urls = extractUrls(text);
+  const imageInfo = extractImageUrl(message);
 
   return {
     event_name: eventName,
@@ -343,9 +407,11 @@ function buildMessageMetadata(message, eventName = "message.received") {
     message: {
       id: message.message_id || "",
       date: message.date || null,
+      keys: Object.keys(message || {}).slice(0, 30),
       has_text: Boolean(message.text),
       has_caption: Boolean(message.caption),
-      has_photo: Boolean(message.photo),
+      has_photo: Boolean(imageInfo?.url),
+      photo_source: imageInfo?.source || "",
       url_count: urls.length,
       text_length: text.length
     },
@@ -1742,18 +1808,155 @@ function getImageMimeType(url = "") {
   return "image/jpeg";
 }
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  const chunks = [];
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + chunkSize)));
+  }
+
+  return btoa(chunks.join(""));
+}
+
+async function downloadImageAsBase64(url) {
+  const response = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "User-Agent": "Mozilla/5.0 ZaloRentalBot/1.0"
+    },
+    signal: AbortSignal.timeout(12000)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Download image failed: HTTP ${response.status}`);
+  }
+
+  const contentLength = Number(response.headers.get("content-length") || 0);
+
+  if (contentLength > MAX_IMAGE_BYTES) {
+    throw new Error(`Image too large: ${contentLength} bytes`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const buffer = await response.arrayBuffer();
+
+  if (buffer.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(`Image too large: ${buffer.byteLength} bytes`);
+  }
+
+  return {
+    data: arrayBufferToBase64(buffer),
+    mimeType: contentType.startsWith("image/") ? contentType.split(";")[0] : getImageMimeType(url),
+    byteLength: buffer.byteLength
+  };
+}
+
+async function askGeminiImage(env, prompt, image, options = {}) {
+  if (!env.GEMINI_API_KEY) {
+    return "";
+  }
+
+  const model = options.model || env.GEMINI_IMAGE_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+  const startedAt = Date.now();
+  let logged = false;
+
+  try {
+    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: image.mimeType,
+                  data: image.data
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.2
+        }
+      }),
+      signal: AbortSignal.timeout(20000)
+    });
+    const data = await response.json().catch(() => ({}));
+    const usage = getUsageMetadata(data);
+    const errorInfo = getAiErrorInfo(data, response.status);
+
+    await logAiUsage(env, {
+      message: options.message,
+      model,
+      feature: options.feature || "image_analysis",
+      ok: response.ok,
+      httpStatus: response.status,
+      errorCode: response.ok ? "" : errorInfo.code,
+      errorMessage: response.ok ? "" : errorInfo.message,
+      promptTokens: usage.promptTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      durationMs: Date.now() - startedAt,
+      endpoint: "generateContent",
+      inputType: "image_base64"
+    });
+    logged = true;
+
+    if (!response.ok) {
+      throw new Error(`Gemini image API failed: ${JSON.stringify(data)}`);
+    }
+
+    return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
+  } catch (error) {
+    if (!logged) {
+      const errorInfo = getAiErrorInfo({}, null, error);
+      await logAiUsage(env, {
+        message: options.message,
+        model,
+        feature: options.feature || "image_analysis",
+        ok: false,
+        errorCode: errorInfo.code,
+        errorMessage: errorInfo.message,
+        durationMs: Date.now() - startedAt,
+        endpoint: "generateContent",
+        inputType: "image_base64"
+      });
+    }
+
+    throw error;
+  }
+}
+
 async function analyzeImage(env, message, eventName = "message.image.received") {
-  const photoUrl = message.photo;
+  const imageInfo = extractImageUrl(message);
+  const photoUrl = imageInfo?.url || "";
   const caption = getMessageText(message);
 
   await saveMessage(env, message, eventName);
 
   if (!photoUrl) {
-    return "Khong thay URL anh trong webhook.";
+    return "Da nhan event anh, nhung webhook khong co photo_url/url de tai anh. Hay thu gui lai anh hoac xem dashboard metadata.";
   }
 
   if (!env.GEMINI_API_KEY) {
     return "Da nhan anh, nhung chua co GEMINI_API_KEY de nhan dien.";
+  }
+
+  let imagePayload;
+
+  try {
+    imagePayload = await downloadImageAsBase64(photoUrl);
+  } catch (error) {
+    console.error(error);
+    return `Da thay URL anh (${imageInfo?.source || "unknown"}), nhung chua tai duoc anh de phan tich: ${limitText(error?.message || error, 180)}`;
   }
 
   const prompt = `
@@ -1764,24 +1967,12 @@ Tra loi bang tieng Viet khong dau, ngan gon.
 
 Caption: ${caption}
 `;
-  const result = await askGeminiInteraction(
-    env,
-    [
-      { type: "text", text: prompt },
-      {
-        type: "image",
-        uri: photoUrl,
-        mime_type: getImageMimeType(photoUrl)
-      }
-    ],
-    {
-      model: env.GEMINI_IMAGE_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
-      feature: "image_analysis",
-      message,
-      generationConfig: { thinking_level: "minimal" }
-    }
-  );
-  let answer = result.text || "Da nhan anh nhung chua phan tich duoc.";
+  let answer = await askGeminiImage(env, prompt, imagePayload, {
+    feature: "image_analysis",
+    message
+  });
+
+  answer = answer || "Da nhan anh nhung chua phan tich duoc.";
 
   if (wantsWebSearch(caption)) {
     try {
@@ -1814,7 +2005,15 @@ Caption: ${caption}
         photoUrl,
         redactSensitiveText(caption),
         redactSensitiveText(answer),
-        JSON.stringify(buildMessageMetadata(message, "image.analyzed"))
+        JSON.stringify({
+          ...buildMessageMetadata(message, "image.analyzed"),
+          image: {
+            source: imageInfo?.source || "",
+            mime_type: imagePayload.mimeType,
+            byte_length: imagePayload.byteLength,
+            stored_as: "url_and_analysis_only"
+          }
+        })
       )
       .run();
   }
