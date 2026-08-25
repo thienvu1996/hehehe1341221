@@ -1859,6 +1859,67 @@ function getUsageMetadata(data = {}) {
   };
 }
 
+function getGeminiApiKeys(env) {
+  const keys = [
+    env.GEMINI_API_KEY,
+    ...String(env.GEMINI_API_KEYS || "")
+      .split(",")
+      .map((key) => key.trim())
+  ].filter(Boolean);
+
+  return [...new Set(keys)];
+}
+
+function getGeminiModelCandidates(env, preferredModel) {
+  const configuredFallbacks = String(env.GEMINI_FALLBACK_MODELS || "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  const models = [
+    preferredModel,
+    DEFAULT_GEMINI_MODEL,
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite",
+    ...configuredFallbacks
+  ].filter(Boolean);
+
+  return [...new Set(models)];
+}
+
+function getGeminiSearchModelCandidates(env, preferredModel) {
+  const configuredFallbacks = String(env.GEMINI_SEARCH_FALLBACK_MODELS || env.GEMINI_FALLBACK_MODELS || "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  const models = [
+    preferredModel,
+    env.GEMINI_SEARCH_MODEL,
+    DEFAULT_GEMINI_SEARCH_MODEL,
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite",
+    ...configuredFallbacks
+  ].filter(Boolean);
+
+  return [...new Set(models)];
+}
+
+function shouldRetryGeminiError(status, errorInfo = {}) {
+  const code = String(errorInfo.code || "").toUpperCase();
+  const message = String(errorInfo.message || "").toLowerCase();
+
+  return (
+    (status === 400 && code === "FAILED_PRECONDITION") ||
+    status === 429 ||
+    status === 503 ||
+    status === 504 ||
+    code.includes("RESOURCE_EXHAUSTED") ||
+    message.includes("quota") ||
+    message.includes("location is not supported") ||
+    message.includes("timeout") ||
+    message.includes("too many requests")
+  );
+}
+
 function getAiErrorInfo(data = {}, httpStatus = null, error = null) {
   const apiError = data.error || {};
 
@@ -2268,76 +2329,89 @@ async function fetchUrlInfo(url) {
 }
 
 async function askGemini(env, prompt, options = {}) {
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return "";
   }
 
-  const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
-  const startedAt = Date.now();
-  let logged = false;
+  const models = getGeminiModelCandidates(env, options.model || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL);
+  const apiKeys = getGeminiApiKeys(env);
+  let lastError;
 
-  try {
-    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.2
+  for (const model of models) {
+    for (const apiKey of apiKeys) {
+      const startedAt = Date.now();
+      let logged = false;
+
+      try {
+        const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${apiKey}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: prompt }]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.2
+            }
+          }),
+          signal: AbortSignal.timeout(12000)
+        });
+        const data = await response.json().catch(() => ({}));
+        const usage = getUsageMetadata(data);
+        const errorInfo = getAiErrorInfo(data, response.status);
+
+        await logAiUsage(env, {
+          message: options.message,
+          model,
+          feature: options.feature || "generate_content",
+          ok: response.ok,
+          httpStatus: response.status,
+          errorCode: response.ok ? "" : errorInfo.code,
+          errorMessage: response.ok ? "" : errorInfo.message,
+          promptTokens: usage.promptTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+          durationMs: Date.now() - startedAt,
+          endpoint: "generateContent",
+          inputType: "text"
+        });
+        logged = true;
+
+        if (response.ok) {
+          return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
         }
-      }),
-      signal: AbortSignal.timeout(12000)
-    });
-    const data = await response.json().catch(() => ({}));
-    const usage = getUsageMetadata(data);
-    const errorInfo = getAiErrorInfo(data, response.status);
 
-    await logAiUsage(env, {
-      message: options.message,
-      model,
-      feature: options.feature || "generate_content",
-      ok: response.ok,
-      httpStatus: response.status,
-      errorCode: response.ok ? "" : errorInfo.code,
-      errorMessage: response.ok ? "" : errorInfo.message,
-      promptTokens: usage.promptTokens,
-      outputTokens: usage.outputTokens,
-      totalTokens: usage.totalTokens,
-      durationMs: Date.now() - startedAt,
-      endpoint: "generateContent",
-      inputType: "text"
-    });
-    logged = true;
+        lastError = new Error(`Gemini API failed: ${JSON.stringify(data)}`);
 
-    if (!response.ok) {
-      throw new Error(`Gemini API failed: ${JSON.stringify(data)}`);
+        if (!shouldRetryGeminiError(response.status, errorInfo)) {
+          throw lastError;
+        }
+      } catch (error) {
+        lastError = error;
+
+        if (!logged) {
+          const errorInfo = getAiErrorInfo({}, null, error);
+          await logAiUsage(env, {
+            message: options.message,
+            model,
+            feature: options.feature || "generate_content",
+            ok: false,
+            errorCode: errorInfo.code,
+            errorMessage: errorInfo.message,
+            durationMs: Date.now() - startedAt,
+            endpoint: "generateContent",
+            inputType: "text"
+          });
+        }
+      }
     }
-
-    return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
-  } catch (error) {
-    if (!logged) {
-      const errorInfo = getAiErrorInfo({}, null, error);
-      await logAiUsage(env, {
-        message: options.message,
-        model,
-        feature: options.feature || "generate_content",
-        ok: false,
-        errorCode: errorInfo.code,
-        errorMessage: errorInfo.message,
-        durationMs: Date.now() - startedAt,
-        endpoint: "generateContent",
-        inputType: "text"
-      });
-    }
-
-    throw error;
   }
+
+  throw lastError || new Error("Gemini API failed");
 }
 
 function parseInteractionText(data) {
@@ -2384,83 +2458,96 @@ function parseInteractionSources(data) {
 }
 
 async function askGeminiInteraction(env, input, options = {}) {
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return { text: "", sources: [] };
   }
 
-  const model = options.model || env.GEMINI_SEARCH_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_SEARCH_MODEL;
-  const startedAt = Date.now();
-  let logged = false;
-  const payload = {
-    model,
-    input
-  };
+  const models = getGeminiSearchModelCandidates(env, options.model || env.GEMINI_SEARCH_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_SEARCH_MODEL);
+  const apiKeys = getGeminiApiKeys(env);
+  let lastError;
 
-  if (options.tools) {
-    payload.tools = options.tools;
-  }
-
-  if (options.generationConfig) {
-    payload.generation_config = options.generationConfig;
-  }
-
-  try {
-    const response = await fetch(`${GEMINI_API_BASE_URL}/interactions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": env.GEMINI_API_KEY
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000)
-    });
-    const data = await response.json().catch(() => ({}));
-    const usage = getUsageMetadata(data);
-    const errorInfo = getAiErrorInfo(data, response.status);
-
-    await logAiUsage(env, {
-      message: options.message,
-      model,
-      feature: options.feature || "interaction",
-      ok: response.ok,
-      httpStatus: response.status,
-      errorCode: response.ok ? "" : errorInfo.code,
-      errorMessage: response.ok ? "" : errorInfo.message,
-      promptTokens: usage.promptTokens,
-      outputTokens: usage.outputTokens,
-      totalTokens: usage.totalTokens,
-      durationMs: Date.now() - startedAt,
-      endpoint: "interactions",
-      inputType: Array.isArray(input) ? "multimodal" : "text"
-    });
-    logged = true;
-
-    if (!response.ok) {
-      throw new Error(`Gemini interaction failed: ${JSON.stringify(data)}`);
-    }
-
-    return {
-      text: parseInteractionText(data),
-      sources: parseInteractionSources(data)
-    };
-  } catch (error) {
-    if (!logged) {
-      const errorInfo = getAiErrorInfo({}, null, error);
-      await logAiUsage(env, {
-        message: options.message,
+  for (const model of models) {
+    for (const apiKey of apiKeys) {
+      const startedAt = Date.now();
+      let logged = false;
+      const payload = {
         model,
-        feature: options.feature || "interaction",
-        ok: false,
-        errorCode: errorInfo.code,
-        errorMessage: errorInfo.message,
-        durationMs: Date.now() - startedAt,
-        endpoint: "interactions",
-        inputType: Array.isArray(input) ? "multimodal" : "text"
-      });
-    }
+        input
+      };
 
-    throw error;
+      if (options.tools) {
+        payload.tools = options.tools;
+      }
+
+      if (options.generationConfig) {
+        payload.generation_config = options.generationConfig;
+      }
+
+      try {
+        const response = await fetch(`${GEMINI_API_BASE_URL}/interactions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15000)
+        });
+        const data = await response.json().catch(() => ({}));
+        const usage = getUsageMetadata(data);
+        const errorInfo = getAiErrorInfo(data, response.status);
+
+        await logAiUsage(env, {
+          message: options.message,
+          model,
+          feature: options.feature || "interaction",
+          ok: response.ok,
+          httpStatus: response.status,
+          errorCode: response.ok ? "" : errorInfo.code,
+          errorMessage: response.ok ? "" : errorInfo.message,
+          promptTokens: usage.promptTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+          durationMs: Date.now() - startedAt,
+          endpoint: "interactions",
+          inputType: Array.isArray(input) ? "multimodal" : "text"
+        });
+        logged = true;
+
+        if (response.ok) {
+          return {
+            text: parseInteractionText(data),
+            sources: parseInteractionSources(data)
+          };
+        }
+
+        lastError = new Error(`Gemini interaction failed: ${JSON.stringify(data)}`);
+
+        if (!shouldRetryGeminiError(response.status, errorInfo)) {
+          throw lastError;
+        }
+      } catch (error) {
+        lastError = error;
+
+        if (!logged) {
+          const errorInfo = getAiErrorInfo({}, null, error);
+          await logAiUsage(env, {
+            message: options.message,
+            model,
+            feature: options.feature || "interaction",
+            ok: false,
+            errorCode: errorInfo.code,
+            errorMessage: errorInfo.message,
+            durationMs: Date.now() - startedAt,
+            endpoint: "interactions",
+            inputType: Array.isArray(input) ? "multimodal" : "text"
+          });
+        }
+      }
+    }
   }
+
+  throw lastError || new Error("Gemini interaction failed");
 }
 
 async function searchWeb(env, query, message = null) {
@@ -2511,7 +2598,7 @@ async function saveSearch(env, message, query, answer, sources) {
 }
 
 async function summarizeRentalLink(env, message, url, sourceText, urlInfo) {
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return {
       summary: urlInfo.title || urlInfo.description || "Đã lưu link. Chưa có GEMINI_API_KEY để tóm tắt.",
       priceText: "",
@@ -2861,7 +2948,7 @@ async function extractAndSaveMemories(env, message, text) {
   const fallbackMemory = parseRentalMemoryFromText(text);
   const entries = fallbackMemory ? [fallbackMemory] : [];
 
-  if (env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length > 0) {
     const prompt = `
 Bạn là bộ trích xuất trí nhớ cho Zalo bot. Chỉ trả về JSON hợp lệ.
 Nhiệm vụ: đọc tin nhắn mới và chọn thông tin đáng nhớ cho lần sau.
@@ -3100,6 +3187,41 @@ async function getBrokenLinks(env, chatId, limit = 10) {
   return result.results || [];
 }
 
+async function getVisibleRecentLinks(env, message, limit = 20) {
+  if (isPrivateChat(message) && isOwnerMessage(env, message)) {
+    const result = await env.DB.prepare(
+      `SELECT id, url, title, summary, price_text, area_text, status, http_status, created_at, updated_at
+       FROM links
+       ORDER BY datetime(created_at) DESC
+       LIMIT ?`
+    )
+      .bind(limit)
+      .all();
+
+    return result.results || [];
+  }
+
+  return getRecentLinks(env, message.chat?.id || "", limit);
+}
+
+async function getVisibleBrokenLinks(env, message, limit = 10) {
+  if (isPrivateChat(message) && isOwnerMessage(env, message)) {
+    const result = await env.DB.prepare(
+      `SELECT id, url, title, summary, status, http_status, updated_at
+       FROM links
+       WHERE status != 'ok'
+       ORDER BY datetime(updated_at) DESC
+       LIMIT ?`
+    )
+      .bind(limit)
+      .all();
+
+    return result.results || [];
+  }
+
+  return getBrokenLinks(env, message.chat?.id || "", limit);
+}
+
 function formatLinkList(links) {
   if (links.length === 0) {
     return "Chưa có link nào được lưu trong chat này.";
@@ -3305,7 +3427,7 @@ async function answerContextQuestion(env, message, question) {
     return "Tin nhắn riêng chỉ cho admin xem tổng dữ liệu. Tài khoản này chưa nằm trong OWNER_ZALO_USER_IDS.";
   }
 
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return formatChatContextFallback(context, scopeLabel);
   }
 
@@ -3450,7 +3572,7 @@ function normalizeRouteIntent(intent) {
 }
 
 async function inferConversationRoute(env, message, question) {
-  if (!env.GEMINI_API_KEY || !question.trim()) {
+  if (getGeminiApiKeys(env).length === 0 || !question.trim()) {
     return null;
   }
 
@@ -3553,7 +3675,7 @@ async function answerGeneralQuestion(env, message, question) {
     }
   }
 
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return `${formatChatContextFallback(context, scopeLabel)}\n\nChưa có Gemini nên bot chưa trả lời hỏi đáp tự nhiên được.`;
   }
 
@@ -3583,6 +3705,23 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
     );
   } catch (error) {
     console.error(error);
+
+    const normalized = normalizeText(question);
+
+    if (normalized.includes("link") || normalized.includes("co r") || normalized.includes("kiem tra") || normalized.includes("ktra")) {
+      const links = await getVisibleRecentLinks(env, message, 5);
+
+      if (links.length > 0) {
+        return `Mình kiểm tra lại rồi, đang có ${links.length} link gần nhất:\n${formatLinkList(links)}`;
+      }
+
+      return [
+        "Mình kiểm tra D1 rồi: hiện chưa có link nào được lưu.",
+        "Nếu bạn thấy link trong group nhưng dashboard/bot không có, khả năng cao tin đó không @ bot nên Zalo không gửi webhook.",
+        "Gửi lại link kèm @Bot Thu Thập atess là bot sẽ lưu."
+      ].join("\n");
+    }
+
     if (isContextQuestion(question)) {
       return formatChatContextFallback(context, scopeLabel);
     }
@@ -3635,16 +3774,24 @@ async function answerQuestion(env, message, question) {
   }
 
   if (normalized.includes("loi") || normalized.includes("hong") || normalized.includes("die")) {
-    return `Các link đang lỗi:\n${formatLinkList(await getBrokenLinks(env, chatId))}`;
+    return `Các link đang lỗi:\n${formatLinkList(await getVisibleBrokenLinks(env, message))}`;
   }
 
-  const links = await getRecentLinks(env, chatId, 20);
+  const links = await getVisibleRecentLinks(env, message, 20);
 
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return `Đã có ${links.length} link gần nhất.\n${formatLinkList(links.slice(0, 8))}\n\nChưa có GEMINI_API_KEY nên bot chưa trả lời thông minh được.`;
   }
 
   if (links.length === 0) {
+    if (normalized === "link" || normalized.includes("co r") || normalized.includes("kiem tra") || normalized.includes("ktra")) {
+      return [
+        "Mình kiểm tra D1 rồi: hiện chưa có link nào được lưu.",
+        "Nếu link nằm trong group nhưng không thấy ở đây, thường là do tin đó không @ bot nên Zalo không gửi webhook cho bot.",
+        "Bạn gửi lại link kèm @Bot Thu Thập atess để bot lưu nhé."
+      ].join("\n");
+    }
+
     try {
       const result = await searchWeb(env, enrichedQuestion, message);
       await saveSearch(env, message, enrichedQuestion, result.answer, result.sources);
@@ -3727,7 +3874,7 @@ async function answerWithConversationRoute(env, message, question) {
   }
 
   if (route.intent === "broken_links") {
-    return `Các link đang lỗi:\n${formatLinkList(await getBrokenLinks(env, message.chat?.id || ""))}`;
+    return `Các link đang lỗi:\n${formatLinkList(await getVisibleBrokenLinks(env, message))}`;
   }
 
   if (route.intent === "rental_search") {
@@ -3828,7 +3975,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
     return answerGeneralQuestion(env, message, cleanQuestion || text);
   }
 
-  if (env.GEMINI_API_KEY && cleanQuestion) {
+  if (getGeminiApiKeys(env).length > 0 && cleanQuestion) {
     return answerGeneralQuestion(env, message, cleanQuestion);
   }
 
@@ -3896,16 +4043,17 @@ async function downloadImageAsBase64(url) {
 }
 
 async function askGeminiImage(env, prompt, image, options = {}) {
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return "";
   }
 
   const model = options.model || env.GEMINI_IMAGE_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+  const apiKey = getGeminiApiKeys(env)[0];
   const startedAt = Date.now();
   let logged = false;
 
   try {
-    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
+    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -3987,7 +4135,7 @@ async function analyzeImage(env, message, eventName = "message.image.received") 
     return "Đã nhận event ảnh, nhưng webhook không có photo_url/url để tải ảnh. Hãy thử gửi lại ảnh hoặc xem dashboard metadata.";
   }
 
-  if (!env.GEMINI_API_KEY) {
+  if (getGeminiApiKeys(env).length === 0) {
     return "Đã nhận ảnh, nhưng chưa có GEMINI_API_KEY để nhận diện.";
   }
 
