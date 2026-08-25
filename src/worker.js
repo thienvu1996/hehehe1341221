@@ -83,6 +83,12 @@ function safeJsonParse(value, fallback = {}) {
   }
 }
 
+function truncateForDb(value, maxLength = 1200) {
+  const text = String(value || "");
+
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 3)}...`;
+}
+
 function normalizeText(text) {
   return String(text || "")
     .normalize("NFD")
@@ -111,28 +117,51 @@ function getCleanQuestion(text, botName = "") {
   return cleanText.replace(/^@\S+\s*/, "").trim();
 }
 
-function isRentalQuestion(text) {
+function isWeatherQuestion(text) {
   const normalized = normalizeText(text);
 
   return (
-    normalized.includes("search") ||
-    normalized.includes("google") ||
-    normalized.includes("gg") ||
-    normalized.includes("link") ||
+    normalized.includes("thoi tiet") ||
+    normalized.includes("du bao") ||
+    normalized.includes("mua khong") ||
+    normalized.includes("nong khong")
+  );
+}
+
+function isRentalQuestion(text) {
+  const normalized = normalizeText(text);
+
+  if (isWeatherQuestion(text)) {
+    return false;
+  }
+
+  const hasRentalIntent =
     normalized.includes("nha") ||
     normalized.includes("phong") ||
     normalized.includes("thue") ||
-    normalized.includes("gia") ||
-    normalized.includes("quan") ||
-    normalized.includes("hom nay") ||
+    normalized.includes("tro") ||
+    normalized.includes("can ho") ||
+    normalized.includes("chung cu") ||
+    normalized.includes("tim nha") ||
+    normalized.includes("tim phong");
+
+  return (
+    hasRentalIntent ||
+    normalized.includes("link") ||
     normalized.includes("loi") ||
     normalized.includes("help") ||
-    normalized.includes("tim") ||
-    normalized.includes("duoi") ||
-    normalized.includes("ban kinh") ||
-    normalized.includes("gan") ||
-    normalized.includes("trieu") ||
-    normalized.includes("10tr") ||
+    (hasRentalIntent && normalized.includes("search")) ||
+    (hasRentalIntent && normalized.includes("google")) ||
+    (hasRentalIntent && normalized.includes("gg")) ||
+    (hasRentalIntent && normalized.includes("gia")) ||
+    (hasRentalIntent && normalized.includes("quan")) ||
+    (hasRentalIntent && normalized.includes("hom nay")) ||
+    (hasRentalIntent && normalized.includes("tim")) ||
+    (hasRentalIntent && normalized.includes("duoi")) ||
+    (hasRentalIntent && normalized.includes("ban kinh")) ||
+    (hasRentalIntent && normalized.includes("gan")) ||
+    (hasRentalIntent && normalized.includes("trieu")) ||
+    (hasRentalIntent && normalized.includes("10tr")) ||
     /\b\d+\s*tr\b/.test(normalized)
   );
 }
@@ -241,6 +270,76 @@ function buildMessageMetadata(message, eventName = "message.received") {
   };
 }
 
+function getUsageMetadata(data = {}) {
+  const usage = data.usageMetadata || data.usage_metadata || {};
+
+  return {
+    promptTokens: usage.promptTokenCount || usage.prompt_token_count || usage.inputTokenCount || usage.input_token_count || 0,
+    outputTokens:
+      usage.candidatesTokenCount ||
+      usage.candidates_token_count ||
+      usage.outputTokenCount ||
+      usage.output_token_count ||
+      0,
+    totalTokens: usage.totalTokenCount || usage.total_token_count || 0
+  };
+}
+
+function getAiErrorInfo(data = {}, httpStatus = null, error = null) {
+  const apiError = data.error || {};
+
+  return {
+    code: String(apiError.status || apiError.code || error?.name || httpStatus || ""),
+    message: truncateForDb(apiError.message || error?.message || error || "", 1200)
+  };
+}
+
+async function logAiUsage(env, usage) {
+  if (!env.DB) {
+    return;
+  }
+
+  try {
+    const message = usage.message || {};
+    await env.DB.prepare(
+      `INSERT INTO ai_usage
+        (provider, model, feature, chat_id, chat_type, user_id, user_name, message_id,
+         ok, http_status, error_code, error_message, prompt_tokens, output_tokens, total_tokens, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        usage.provider || "gemini",
+        usage.model || "",
+        usage.feature || "",
+        message.chat?.id || usage.chatId || "",
+        message.chat?.chat_type || usage.chatType || "",
+        message.from?.id || usage.userId || "",
+        message.from?.display_name || usage.userName || "",
+        message.message_id || usage.messageId || null,
+        usage.ok ? 1 : 0,
+        usage.httpStatus || null,
+        usage.errorCode || "",
+        truncateForDb(usage.errorMessage || "", 1200),
+        usage.promptTokens || 0,
+        usage.outputTokens || 0,
+        usage.totalTokens || 0,
+        truncateForDb(
+          JSON.stringify({
+            duration_ms: usage.durationMs || 0,
+            endpoint: usage.endpoint || "",
+            input_type: usage.inputType || "",
+            quota_related: usage.httpStatus === 429 || /quota|rate|resource_exhausted/i.test(usage.errorMessage || ""),
+            captured_at: new Date().toISOString()
+          }),
+          4000
+        )
+      )
+      .run();
+  } catch (error) {
+    console.error("Failed to log AI usage:", error);
+  }
+}
+
 function wantsWebSearch(text) {
   const normalized = normalizeText(text);
 
@@ -254,10 +353,7 @@ function wantsWebSearch(text) {
     normalized.includes("tim tren web") ||
     normalized.includes("tim nha") ||
     normalized.includes("tim phong") ||
-    normalized.includes("thoi tiet") ||
-    normalized.includes("du bao") ||
-    normalized.includes("mua khong") ||
-    normalized.includes("nong khong") ||
+    isWeatherQuestion(text) ||
     normalized.includes("tin moi") ||
     normalized.includes("hom nay co gi") ||
     normalized.includes("gia vang") ||
@@ -286,6 +382,26 @@ function isLikelyQuestion(text) {
   );
 }
 
+function isLikelyLocationText(text) {
+  const normalized = normalizeText(text).trim();
+
+  return (
+    normalized.length >= 3 &&
+    normalized.length <= 90 &&
+    !normalized.includes("?") &&
+    !isRentalQuestion(text) &&
+    (normalized.includes("quan") ||
+      normalized.includes("phuong") ||
+      normalized.includes("huyen") ||
+      normalized.includes("xa ") ||
+      normalized.includes("thi tran") ||
+      normalized.includes("thanh pho") ||
+      normalized.includes("tp ") ||
+      normalized.includes("duong") ||
+      normalized.includes("an thoi dong"))
+  );
+}
+
 function isLiveInfoQuestion(text) {
   const normalized = normalizeText(text);
 
@@ -299,10 +415,33 @@ function isLiveInfoQuestion(text) {
   );
 }
 
+async function isWeatherLocationFollowUp(env, message, text) {
+  if (!env.DB || !isLikelyLocationText(text)) {
+    return false;
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT text
+       FROM messages
+       WHERE chat_id = ? AND (message_id IS NULL OR message_id != ?)
+       ORDER BY datetime(created_at) DESC
+       LIMIT 5`
+    )
+      .bind(message.chat?.id || "", message.message_id || "")
+      .all();
+
+    return (result.results || []).some((row) => isWeatherQuestion(row.text || ""));
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
 function enrichLiveQuery(env, question) {
   const normalized = normalizeText(question);
 
-  if (normalized.includes("thoi tiet") && !normalized.includes(" o ") && !normalized.includes(" tai ")) {
+  if (isWeatherQuestion(question) && !normalized.includes(" o ") && !normalized.includes(" tai ")) {
     return `${question} tai ${env.DEFAULT_WEATHER_LOCATION || "TP Ho Chi Minh, Viet Nam"}`;
   }
 
@@ -372,36 +511,77 @@ async function fetchUrlInfo(url) {
   }
 }
 
-async function askGemini(env, prompt) {
+async function askGemini(env, prompt, options = {}) {
   if (!env.GEMINI_API_KEY) {
     return "";
   }
 
   const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
-  const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: prompt }]
+  const startedAt = Date.now();
+  let logged = false;
+
+  try {
+    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.2
         }
-      ],
-      generationConfig: {
-        temperature: 0.2
-      }
-    }),
-    signal: AbortSignal.timeout(12000)
-  });
-  const data = await response.json().catch(() => ({}));
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+    const data = await response.json().catch(() => ({}));
+    const usage = getUsageMetadata(data);
+    const errorInfo = getAiErrorInfo(data, response.status);
 
-  if (!response.ok) {
-    throw new Error(`Gemini API failed: ${JSON.stringify(data)}`);
+    await logAiUsage(env, {
+      message: options.message,
+      model,
+      feature: options.feature || "generate_content",
+      ok: response.ok,
+      httpStatus: response.status,
+      errorCode: response.ok ? "" : errorInfo.code,
+      errorMessage: response.ok ? "" : errorInfo.message,
+      promptTokens: usage.promptTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      durationMs: Date.now() - startedAt,
+      endpoint: "generateContent",
+      inputType: "text"
+    });
+    logged = true;
+
+    if (!response.ok) {
+      throw new Error(`Gemini API failed: ${JSON.stringify(data)}`);
+    }
+
+    return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
+  } catch (error) {
+    if (!logged) {
+      const errorInfo = getAiErrorInfo({}, null, error);
+      await logAiUsage(env, {
+        message: options.message,
+        model,
+        feature: options.feature || "generate_content",
+        ok: false,
+        errorCode: errorInfo.code,
+        errorMessage: errorInfo.message,
+        durationMs: Date.now() - startedAt,
+        endpoint: "generateContent",
+        inputType: "text"
+      });
+    }
+
+    throw error;
   }
-
-  return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
 }
 
 function parseInteractionText(data) {
@@ -453,6 +633,8 @@ async function askGeminiInteraction(env, input, options = {}) {
   }
 
   const model = options.model || env.GEMINI_SEARCH_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_SEARCH_MODEL;
+  const startedAt = Date.now();
+  let logged = false;
   const payload = {
     model,
     input
@@ -466,28 +648,66 @@ async function askGeminiInteraction(env, input, options = {}) {
     payload.generation_config = options.generationConfig;
   }
 
-  const response = await fetch(`${GEMINI_API_BASE_URL}/interactions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": env.GEMINI_API_KEY
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(15000)
-  });
-  const data = await response.json().catch(() => ({}));
+  try {
+    const response = await fetch(`${GEMINI_API_BASE_URL}/interactions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": env.GEMINI_API_KEY
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await response.json().catch(() => ({}));
+    const usage = getUsageMetadata(data);
+    const errorInfo = getAiErrorInfo(data, response.status);
 
-  if (!response.ok) {
-    throw new Error(`Gemini interaction failed: ${JSON.stringify(data)}`);
+    await logAiUsage(env, {
+      message: options.message,
+      model,
+      feature: options.feature || "interaction",
+      ok: response.ok,
+      httpStatus: response.status,
+      errorCode: response.ok ? "" : errorInfo.code,
+      errorMessage: response.ok ? "" : errorInfo.message,
+      promptTokens: usage.promptTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      durationMs: Date.now() - startedAt,
+      endpoint: "interactions",
+      inputType: Array.isArray(input) ? "multimodal" : "text"
+    });
+    logged = true;
+
+    if (!response.ok) {
+      throw new Error(`Gemini interaction failed: ${JSON.stringify(data)}`);
+    }
+
+    return {
+      text: parseInteractionText(data),
+      sources: parseInteractionSources(data)
+    };
+  } catch (error) {
+    if (!logged) {
+      const errorInfo = getAiErrorInfo({}, null, error);
+      await logAiUsage(env, {
+        message: options.message,
+        model,
+        feature: options.feature || "interaction",
+        ok: false,
+        errorCode: errorInfo.code,
+        errorMessage: errorInfo.message,
+        durationMs: Date.now() - startedAt,
+        endpoint: "interactions",
+        inputType: Array.isArray(input) ? "multimodal" : "text"
+      });
+    }
+
+    throw error;
   }
-
-  return {
-    text: parseInteractionText(data),
-    sources: parseInteractionSources(data)
-  };
 }
 
-async function searchWeb(env, query) {
+async function searchWeb(env, query, message = null) {
   const prompt = `
 Ban la tro ly trong nhom Zalo.
 Hay tim web bang Google Search va tra loi ngan gon bang tieng Viet khong dau.
@@ -499,7 +719,9 @@ Cau hoi: ${query}
 `;
   const result = await askGeminiInteraction(env, prompt, {
     tools: [{ type: "google_search" }],
-    model: env.GEMINI_SEARCH_MODEL || DEFAULT_GEMINI_SEARCH_MODEL
+    model: env.GEMINI_SEARCH_MODEL || DEFAULT_GEMINI_SEARCH_MODEL,
+    feature: "web_search",
+    message
   });
   const sourceText = result.sources.length
     ? `\n\nNguon:\n${result.sources.map((source, index) => `${index + 1}. ${source.title}: ${source.url}`).join("\n")}`
@@ -532,7 +754,7 @@ async function saveSearch(env, message, query, answer, sources) {
     .run();
 }
 
-async function summarizeRentalLink(env, url, sourceText, urlInfo) {
+async function summarizeRentalLink(env, message, url, sourceText, urlInfo) {
   if (!env.GEMINI_API_KEY) {
     return {
       summary: urlInfo.title || urlInfo.description || "Da luu link. Chua co GEMINI_API_KEY de tom tat.",
@@ -557,7 +779,10 @@ Tieu de: ${urlInfo.title}
 Mo ta: ${urlInfo.description}
 Noi dung trang: ${urlInfo.plainText}
 `;
-  const text = await askGemini(env, prompt);
+  const text = await askGemini(env, prompt, {
+    feature: "link_summary",
+    message
+  });
 
   try {
     const parsed = JSON.parse(text.replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
@@ -920,7 +1145,12 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
 `;
 
   try {
-    return limitText(await askGemini(env, prompt));
+    return limitText(
+      await askGemini(env, prompt, {
+        feature: "context_answer",
+        message
+      })
+    );
   } catch (error) {
     console.error(error);
     return formatChatContextFallback(context, scopeLabel);
@@ -984,7 +1214,7 @@ async function answerGeneralQuestion(env, message, question) {
   if (isLiveInfoQuestion(question)) {
     try {
       const query = enrichLiveQuery(env, question);
-      const result = await searchWeb(env, query);
+      const result = await searchWeb(env, query, message);
       await saveSearch(env, message, query, result.answer, result.sources);
       return result.answer || "Chua tim duoc thong tin moi phu hop.";
     } catch (error) {
@@ -1012,7 +1242,12 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
 `;
 
   try {
-    return limitText(await askGemini(env, prompt));
+    return limitText(
+      await askGemini(env, prompt, {
+        feature: "general_answer",
+        message
+      })
+    );
   } catch (error) {
     console.error(error);
     return formatChatContextFallback(context, scopeLabel);
@@ -1061,7 +1296,7 @@ async function answerQuestion(env, message, question) {
 
   if (links.length === 0) {
     try {
-      const result = await searchWeb(env, question);
+      const result = await searchWeb(env, question, message);
       await saveSearch(env, message, question, result.answer, result.sources);
       return result.answer || "Chua tim duoc ket qua phu hop.";
     } catch (error) {
@@ -1072,7 +1307,7 @@ async function answerQuestion(env, message, question) {
 
   if (wantsWebSearch(question)) {
     try {
-      const result = await searchWeb(env, question);
+      const result = await searchWeb(env, question, message);
       await saveSearch(env, message, question, result.answer, result.sources);
       return result.answer || "Chua tim duoc ket qua phu hop.";
     } catch (error) {
@@ -1105,7 +1340,12 @@ Danh sach link:
 ${context}
 `;
 
-  return limitText(await askGemini(env, prompt));
+  return limitText(
+    await askGemini(env, prompt, {
+      feature: "rental_answer",
+      message
+    })
+  );
 }
 
 async function processTextMessage(env, message, eventName = "message.text.received") {
@@ -1129,7 +1369,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
 
     for (const url of urls.slice(0, 5)) {
       const urlInfo = await fetchUrlInfo(url);
-      const summaryInfo = await summarizeRentalLink(env, url, text, urlInfo).catch((error) => {
+      const summaryInfo = await summarizeRentalLink(env, message, url, text, urlInfo).catch((error) => {
         console.error(error);
         return {
           summary: urlInfo.title || urlInfo.description || "Da luu link, nhung chua tom tat duoc.",
@@ -1150,6 +1390,10 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
   }
 
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
+  if (await isWeatherLocationFollowUp(env, message, cleanQuestion || text)) {
+    return answerGeneralQuestion(env, message, `thoi tiet tai ${cleanQuestion || text}`);
+  }
+
   if (isRentalQuestion(text) || isRentalQuestion(cleanQuestion) || isContextQuestion(text) || isContextQuestion(cleanQuestion)) {
     return answerQuestion(env, message, cleanQuestion || text);
   }
@@ -1209,6 +1453,8 @@ Caption: ${caption}
     ],
     {
       model: env.GEMINI_IMAGE_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+      feature: "image_analysis",
+      message,
       generationConfig: { thinking_level: "minimal" }
     }
   );
@@ -1217,7 +1463,7 @@ Caption: ${caption}
   if (wantsWebSearch(caption)) {
     try {
       const searchQuery = `${caption}\nKhu vuc/anh: ${answer}`;
-      const searchResult = await searchWeb(env, searchQuery);
+      const searchResult = await searchWeb(env, searchQuery, message);
       answer = `${answer}\n\nKet qua web:\n${searchResult.answer}`;
       await saveSearch(env, message, searchQuery, searchResult.answer, searchResult.sources);
     } catch (error) {
@@ -1358,12 +1604,14 @@ async function handleDashboardData(request, env) {
     return dashboardJson(request, { ok: false, message: "Cloudflare D1 is not configured" }, 500);
   }
 
-  const [countsResult, messagesResult, linksResult, searchesResult, imagesResult] = await Promise.all([
+  const [countsResult, messagesResult, linksResult, searchesResult, imagesResult, aiStatsResult, aiUsageResult] =
+    await Promise.all([
     env.DB.prepare(
       `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
        UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links
        UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches
-       UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images`
+       UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images
+       UNION ALL SELECT 'ai_usage' AS name, COUNT(*) AS total FROM ai_usage`
     ).all(),
     env.DB.prepare(
       `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json, created_at
@@ -1389,9 +1637,31 @@ async function handleDashboardData(request, env) {
        FROM images
        ORDER BY datetime(created_at) DESC
        LIMIT 30`
+    ).all(),
+    env.DB.prepare(
+      `SELECT
+         COUNT(*) AS calls_total,
+         SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS calls_ok,
+         SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS calls_error,
+         SUM(CASE WHEN http_status = 429 OR error_code LIKE '%RESOURCE_EXHAUSTED%' OR lower(error_message) LIKE '%quota%' THEN 1 ELSE 0 END) AS quota_errors,
+         SUM(prompt_tokens) AS prompt_tokens,
+         SUM(output_tokens) AS output_tokens,
+         SUM(total_tokens) AS total_tokens,
+         SUM(CASE WHEN created_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS calls_24h,
+         SUM(CASE WHEN ok = 0 AND created_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS errors_24h,
+         SUM(CASE WHEN created_at >= datetime('now', '-1 day') THEN total_tokens ELSE 0 END) AS tokens_24h
+       FROM ai_usage`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, provider, model, feature, chat_id, chat_type, user_name, ok, http_status, error_code,
+              error_message, prompt_tokens, output_tokens, total_tokens, metadata_json, created_at
+       FROM ai_usage
+       ORDER BY datetime(created_at) DESC
+       LIMIT 60`
     ).all()
   ]);
   const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
+  const aiStats = aiStatsResult.results?.[0] || {};
 
   return dashboardJson(request, {
     ok: true,
@@ -1400,7 +1670,26 @@ async function handleDashboardData(request, env) {
       messages: counts.messages || 0,
       links: counts.links || 0,
       searches: counts.searches || 0,
-      images: counts.images || 0
+      images: counts.images || 0,
+      ai_usage: counts.ai_usage || 0
+    },
+    ai_usage: {
+      stats: {
+        calls_total: aiStats.calls_total || 0,
+        calls_ok: aiStats.calls_ok || 0,
+        calls_error: aiStats.calls_error || 0,
+        quota_errors: aiStats.quota_errors || 0,
+        prompt_tokens: aiStats.prompt_tokens || 0,
+        output_tokens: aiStats.output_tokens || 0,
+        total_tokens: aiStats.total_tokens || 0,
+        calls_24h: aiStats.calls_24h || 0,
+        errors_24h: aiStats.errors_24h || 0,
+        tokens_24h: aiStats.tokens_24h || 0
+      },
+      recent: (aiUsageResult.results || []).map((row) => ({
+        ...row,
+        metadata: safeJsonParse(row.metadata_json)
+      }))
     },
     recent: {
       messages: (messagesResult.results || []).map((row) => ({

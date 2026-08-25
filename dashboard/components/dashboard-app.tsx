@@ -4,9 +4,13 @@ import {
   AlertCircle,
   Bot,
   Camera,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
+  Cpu,
   Database,
   ExternalLink,
+  Gauge,
   Image as ImageIcon,
   KeyRound,
   Link2,
@@ -21,6 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BloubMark } from "./bloub-mark";
 
 const API_URL = process.env.NEXT_PUBLIC_BOT_API_URL || "https://bot.jean1331.io.vn";
+const PAGE_SIZE = 10;
 
 type MessageRow = {
   id: number;
@@ -69,6 +74,25 @@ type ImageRow = {
   created_at: string;
 };
 
+type AiUsageRow = {
+  id: number;
+  provider: string;
+  model: string;
+  feature: string;
+  chat_id: string;
+  chat_type: string;
+  user_name: string;
+  ok: number;
+  http_status?: number | null;
+  error_code: string;
+  error_message: string;
+  prompt_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
 type DashboardData = {
   ok: boolean;
   generated_at: string;
@@ -77,6 +101,22 @@ type DashboardData = {
     links: number;
     searches: number;
     images: number;
+    ai_usage: number;
+  };
+  ai_usage?: {
+    stats: {
+      calls_total: number;
+      calls_ok: number;
+      calls_error: number;
+      quota_errors: number;
+      prompt_tokens: number;
+      output_tokens: number;
+      total_tokens: number;
+      calls_24h: number;
+      errors_24h: number;
+      tokens_24h: number;
+    };
+    recent: AiUsageRow[];
   };
   recent: {
     messages: MessageRow[];
@@ -86,13 +126,14 @@ type DashboardData = {
   };
 };
 
-type TabKey = "links" | "searches" | "images" | "messages";
+type TabKey = "links" | "searches" | "images" | "messages" | "ai";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Link2 }> = [
   { key: "links", label: "Link nha", icon: Link2 },
   { key: "searches", label: "Cau hoi", icon: Search },
   { key: "images", label: "Anh", icon: ImageIcon },
-  { key: "messages", label: "Tin nhan", icon: MessageSquareText }
+  { key: "messages", label: "Tin nhan", icon: MessageSquareText },
+  { key: "ai", label: "AI quota", icon: Gauge }
 ];
 
 const formatDate = (value?: string | number | null) => {
@@ -119,6 +160,28 @@ const normalize = (text: string) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+
+function usePagedRows<T>(rows: T[], query: string) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, rows.length]);
+
+  const pageRows = useMemo(
+    () => rows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [rows, safePage]
+  );
+
+  return {
+    page: safePage,
+    pageRows,
+    totalPages,
+    setPage
+  };
+}
 
 function getMetaLabel(metadata?: Record<string, unknown>) {
   const eventName = typeof metadata?.event_name === "string" ? metadata.event_name : "";
@@ -147,6 +210,56 @@ function StatTile({
       <div>
         <div className="stat-value">{value}</div>
         <div className="stat-label">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function PaginationFooter({
+  page,
+  totalItems,
+  totalPages,
+  onPageChange
+}: {
+  page: number;
+  totalItems: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalItems <= PAGE_SIZE) {
+    return null;
+  }
+
+  const start = (page - 1) * PAGE_SIZE + 1;
+  const end = Math.min(page * PAGE_SIZE, totalItems);
+
+  return (
+    <div className="pagination-bar">
+      <span>
+        {start}-{end} / {totalItems} dong
+      </span>
+      <div className="pagination-actions">
+        <button
+          type="button"
+          className="page-button"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1}
+          aria-label="Trang truoc"
+        >
+          <ChevronLeft size={17} />
+        </button>
+        <span className="page-count">
+          {page}/{totalPages}
+        </span>
+        <button
+          type="button"
+          className="page-button"
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page >= totalPages}
+          aria-label="Trang sau"
+        >
+          <ChevronRight size={17} />
+        </button>
       </div>
     </div>
   );
@@ -221,50 +334,54 @@ function LinksTable({ links, query }: { links: LinkRow[]; query: string }) {
       )
     );
   }, [links, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
 
   if (filtered.length === 0) {
     return <EmptyState icon={Link2} title="Chua co link hop dieu kien" />;
   }
 
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Link</th>
-            <th>Gia / khu vuc</th>
-            <th>Trang thai</th>
-            <th>Cap nhat</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((link) => (
-            <tr key={link.id}>
-              <td>
-                <div className="table-title">{link.summary || link.title || "Link thue nha"}</div>
-                <div className="meta-line">{getMetaLabel(link.metadata)}</div>
-                <a href={link.url} target="_blank" rel="noreferrer" className="external-link">
-                  {link.url}
-                  <ExternalLink size={14} />
-                </a>
-              </td>
-              <td>
-                <div>{link.price_text || "Chua ro gia"}</div>
-                <span className="muted">{link.area_text || "Chua ro khu vuc"}</span>
-              </td>
-              <td>
-                <span className={`status-pill ${link.status === "ok" ? "status-ok" : "status-error"}`}>
-                  {link.status === "ok" ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                  {link.status || "unknown"}
-                  {link.http_status ? ` ${link.http_status}` : ""}
-                </span>
-              </td>
-              <td>{formatDate(link.updated_at)}</td>
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Link</th>
+              <th>Gia / khu vuc</th>
+              <th>Trang thai</th>
+              <th>Cap nhat</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {pageRows.map((link) => (
+              <tr key={link.id}>
+                <td>
+                  <div className="table-title">{link.summary || link.title || "Link thue nha"}</div>
+                  <div className="meta-line">{getMetaLabel(link.metadata)}</div>
+                  <a href={link.url} target="_blank" rel="noreferrer" className="external-link">
+                    {link.url}
+                    <ExternalLink size={14} />
+                  </a>
+                </td>
+                <td>
+                  <div>{link.price_text || "Chua ro gia"}</div>
+                  <span className="muted">{link.area_text || "Chua ro khu vuc"}</span>
+                </td>
+                <td>
+                  <span className={`status-pill ${link.status === "ok" ? "status-ok" : "status-error"}`}>
+                    {link.status === "ok" ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                    {link.status || "unknown"}
+                    {link.http_status ? ` ${link.http_status}` : ""}
+                  </span>
+                </td>
+                <td>{formatDate(link.updated_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+    </>
   );
 }
 
@@ -278,37 +395,41 @@ function SearchList({ searches, query }: { searches: SearchRow[]; query: string 
 
     return searches.filter((row) => normalize(`${row.query} ${row.answer}`).includes(needle));
   }, [searches, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
 
   if (filtered.length === 0) {
     return <EmptyState icon={Search} title="Chua co cau hoi hop dieu kien" />;
   }
 
   return (
-    <div className="record-list">
-      {filtered.map((row) => (
-        <article className="record-item" key={row.id}>
-          <div className="record-head">
-            <div>
-              <p className="record-kicker">{row.user_name || "Nguoi dung"} hoi</p>
-              <h3>{row.query}</h3>
-              <div className="meta-line">{getMetaLabel(row.metadata)}</div>
+    <>
+      <div className="record-list">
+        {pageRows.map((row) => (
+          <article className="record-item" key={row.id}>
+            <div className="record-head">
+              <div>
+                <p className="record-kicker">{row.user_name || "Nguoi dung"} hoi</p>
+                <h3>{row.query}</h3>
+                <div className="meta-line">{getMetaLabel(row.metadata)}</div>
+              </div>
+              <time>{formatDate(row.created_at)}</time>
             </div>
-            <time>{formatDate(row.created_at)}</time>
-          </div>
-          <p>{row.answer || "Chua co cau tra loi."}</p>
-          {row.sources?.length ? (
-            <div className="source-row">
-              {row.sources.slice(0, 3).map((source) => (
-                <a key={source.url} href={source.url} target="_blank" rel="noreferrer">
-                  {source.title || "Nguon"}
-                  <ExternalLink size={13} />
-                </a>
-              ))}
-            </div>
-          ) : null}
-        </article>
-      ))}
-    </div>
+            <p>{row.answer || "Chua co cau tra loi."}</p>
+            {row.sources?.length ? (
+              <div className="source-row">
+                {row.sources.slice(0, 3).map((source) => (
+                  <a key={source.url} href={source.url} target="_blank" rel="noreferrer">
+                    {source.title || "Nguon"}
+                    <ExternalLink size={13} />
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+      <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+    </>
   );
 }
 
@@ -322,26 +443,30 @@ function ImageList({ images, query }: { images: ImageRow[]; query: string }) {
 
     return images.filter((row) => normalize(`${row.caption} ${row.analysis}`).includes(needle));
   }, [images, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
 
   if (filtered.length === 0) {
     return <EmptyState icon={Camera} title="Chua co anh hop dieu kien" />;
   }
 
   return (
-    <div className="image-grid">
-      {filtered.map((row) => (
-        <article className="image-item" key={row.id}>
-          <img src={row.photo_url} alt={row.caption || "Anh tu Zalo"} loading="lazy" />
-          <div>
-            <p className="record-kicker">{row.user_name || "Nguoi dung"} gui anh</p>
-            <h3>{row.caption || "Khong co caption"}</h3>
-            <div className="meta-line">{getMetaLabel(row.metadata)}</div>
-            <p>{row.analysis || "Chua co phan tich."}</p>
-            <time>{formatDate(row.created_at)}</time>
-          </div>
-        </article>
-      ))}
-    </div>
+    <>
+      <div className="image-grid">
+        {pageRows.map((row) => (
+          <article className="image-item" key={row.id}>
+            <img src={row.photo_url} alt={row.caption || "Anh tu Zalo"} loading="lazy" />
+            <div>
+              <p className="record-kicker">{row.user_name || "Nguoi dung"} gui anh</p>
+              <h3>{row.caption || "Khong co caption"}</h3>
+              <div className="meta-line">{getMetaLabel(row.metadata)}</div>
+              <p>{row.analysis || "Chua co phan tich."}</p>
+              <time>{formatDate(row.created_at)}</time>
+            </div>
+          </article>
+        ))}
+      </div>
+      <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+    </>
   );
 }
 
@@ -355,28 +480,117 @@ function MessageList({ messages, query }: { messages: MessageRow[]; query: strin
 
     return messages.filter((row) => normalize(`${row.user_name} ${row.text}`).includes(needle));
   }, [messages, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
 
   if (filtered.length === 0) {
     return <EmptyState icon={MessageSquareText} title="Chua co tin nhan hop dieu kien" />;
   }
 
   return (
-    <div className="message-list">
-      {filtered.map((row) => (
-        <article className="message-item" key={row.id}>
-          <div className="message-avatar">
-            <Bot size={17} />
-          </div>
-          <div>
-            <div className="message-meta">
-              <strong>{row.user_name || "Nguoi dung"}</strong>
-              <span>{formatDate(row.created_at || row.message_date)}</span>
+    <>
+      <div className="message-list">
+        {pageRows.map((row) => (
+          <article className="message-item" key={row.id}>
+            <div className="message-avatar">
+              <Bot size={17} />
             </div>
-            <div className="meta-line">{getMetaLabel(row.metadata)}</div>
-            <p>{row.text || "Tin nhan khong co text"}</p>
-          </div>
-        </article>
-      ))}
+            <div>
+              <div className="message-meta">
+                <strong>{row.user_name || "Nguoi dung"}</strong>
+                <span>{formatDate(row.created_at || row.message_date)}</span>
+              </div>
+              <div className="meta-line">{getMetaLabel(row.metadata)}</div>
+              <p>{row.text || "Tin nhan khong co text"}</p>
+            </div>
+          </article>
+        ))}
+      </div>
+      <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+    </>
+  );
+}
+
+function AiUsageList({
+  usage,
+  query,
+  stats
+}: {
+  usage: AiUsageRow[];
+  query: string;
+  stats?: NonNullable<DashboardData["ai_usage"]>["stats"];
+}) {
+  const filtered = useMemo(() => {
+    const needle = normalize(query);
+
+    if (!needle) {
+      return usage;
+    }
+
+    return usage.filter((row) =>
+      normalize(`${row.model} ${row.feature} ${row.error_code} ${row.error_message} ${row.user_name}`).includes(needle)
+    );
+  }, [usage, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
+
+  return (
+    <div className="ai-panel">
+      <div className="quota-note">
+        <Gauge size={18} />
+        <span>
+          Day la usage bot da ghi nhan. Gemini khong tra ve so quota con lai truc tiep, nen loi 429/quota se hien o log.
+        </span>
+      </div>
+      <div className="mini-stats">
+        <StatTile label="AI calls 24h" value={stats?.calls_24h ?? 0} icon={Cpu} accent="#38BDF8" />
+        <StatTile label="Tokens 24h" value={stats?.tokens_24h ?? 0} icon={Sparkles} accent="#22C55E" />
+        <StatTile label="Loi 24h" value={stats?.errors_24h ?? 0} icon={AlertCircle} accent="#F59E0B" />
+        <StatTile label="Quota errors" value={stats?.quota_errors ?? 0} icon={Gauge} accent="#EF4444" />
+      </div>
+      {filtered.length === 0 ? (
+        <EmptyState icon={Gauge} title="Chua co log AI usage" />
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th>Model</th>
+                <th>Status</th>
+                <th>Tokens</th>
+                <th>Loi</th>
+                <th>Luc</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageRows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <div className="table-title">{row.feature || "ai_call"}</div>
+                    <div className="meta-line">{row.provider || "gemini"} | {row.chat_type || "CHAT"}</div>
+                  </td>
+                  <td>{row.model || "unknown"}</td>
+                  <td>
+                    <span className={`status-pill ${row.ok ? "status-ok" : "status-error"}`}>
+                      {row.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                      {row.ok ? "ok" : row.http_status || "error"}
+                    </span>
+                  </td>
+                  <td>
+                    <div>{row.total_tokens || 0}</div>
+                    <span className="muted">in {row.prompt_tokens || 0} / out {row.output_tokens || 0}</span>
+                  </td>
+                  <td>
+                    <div className="error-cell">{row.error_code || "-"}</div>
+                    {row.error_message ? <span className="muted">{row.error_message}</span> : null}
+                  </td>
+                  <td>{formatDate(row.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+        </div>
+      )}
     </div>
   );
 }
@@ -487,6 +701,7 @@ export function DashboardApp() {
         <StatTile label="Link da luu" value={data?.counts.links ?? 0} icon={Link2} accent="#22C55E" />
         <StatTile label="Cau search" value={data?.counts.searches ?? 0} icon={Sparkles} accent="#F59E0B" />
         <StatTile label="Anh da doc" value={data?.counts.images ?? 0} icon={ImageIcon} accent="#F472B6" />
+        <StatTile label="AI calls" value={data?.counts.ai_usage ?? 0} icon={Gauge} accent="#A78BFA" />
       </section>
 
       <section className="workbench">
@@ -534,6 +749,9 @@ export function DashboardApp() {
           {data && activeTab === "searches" ? <SearchList searches={data.recent.searches} query={query} /> : null}
           {data && activeTab === "images" ? <ImageList images={data.recent.images} query={query} /> : null}
           {data && activeTab === "messages" ? <MessageList messages={data.recent.messages} query={query} /> : null}
+          {data && activeTab === "ai" ? (
+            <AiUsageList usage={data.ai_usage?.recent ?? []} stats={data.ai_usage?.stats} query={query} />
+          ) : null}
         </div>
       </section>
     </main>

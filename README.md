@@ -133,6 +133,8 @@ Khi hoi thong tin tong quat, bot dung metadata va du lieu gan nhat trong group h
 Ngoai cac lenh co san, bot se xu ly cau hoi tu nhien bang Gemini. Cau hoi can du lieu moi
 nhu thoi tiet, tin moi, ty gia, gia vang se thu dung web search; neu khong ghi dia diem,
 thoi tiet mac dinh la TP Ho Chi Minh.
+Neu vua hoi thoi tiet roi gui tiep ten dia diem, bot se hieu do la dia diem can tra cuu thoi tiet.
+Moi lan bot goi Gemini, Worker se ghi usage vao D1 de dashboard xem so call, token va loi quota/429.
 
 Neu muon nhan rieng voi bot de hoi tong du lieu tat ca group/chat, set secret admin:
 
@@ -166,6 +168,9 @@ Neu Google Search het quota, bot van luu/phan tich anh nhung se bao chua search 
 ## Web dashboard Next.js
 
 Dashboard doc du lieu tu endpoint Worker `GET /admin/dashboard-data` va yeu cau `DASHBOARD_TOKEN`.
+Dashboard co tab `AI quota` de xem usage bot da ghi nhan. Gemini API khong tra ve so quota con lai
+truc tiep, nen dashboard hien so call/token da dung va cac loi quota/rate limit neu co.
+Moi tab du lieu tu dong phan trang 10 dong/trang khi ket qua dai.
 
 URL dang deploy:
 

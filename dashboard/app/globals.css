@@ -177,7 +177,7 @@ h3 {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -381,10 +381,78 @@ td {
 
 .record-list,
 .message-list,
-.image-grid {
+.image-grid,
+.ai-panel {
   display: grid;
   gap: 10px;
   padding: 12px;
+}
+
+.mini-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quota-note {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.08);
+  line-height: 1.45;
+}
+
+.error-cell {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding: 11px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  background: rgba(7, 16, 19, 0.5);
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: rgba(16, 24, 28, 0.82);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+
+.page-button:hover:not(:disabled) {
+  border-color: #41606a;
+  background: var(--surface-strong);
+}
+
+.page-count {
+  min-width: 54px;
+  text-align: center;
+  color: var(--muted-strong);
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .record-item,
@@ -707,7 +775,8 @@ td {
   }
 
   .summary-grid,
-  .image-grid {
+  .image-grid,
+  .mini-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -732,7 +801,8 @@ td {
   }
 
   .summary-grid,
-  .image-grid {
+  .image-grid,
+  .mini-stats {
     grid-template-columns: 1fr;
   }
 
@@ -763,9 +833,15 @@ td {
   }
 
   .record-head,
-  .message-meta {
+  .message-meta,
+  .pagination-bar {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+  }
+
+  .pagination-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
