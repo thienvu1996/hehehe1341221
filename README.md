@@ -168,6 +168,7 @@ Admin/owner co the dieu khien group tu chat rieng voi bot:
 ```text
 xem nhom
 chon nhom 1
+dat ten nhom 1 la Test PM banhang
 gui nhom da chon: toi nay hop 20h
 set nhom da chon thoi tiet 6h HCM
 len lich nhom da chon mai 18h hop team

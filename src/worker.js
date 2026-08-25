@@ -1379,9 +1379,9 @@ async function getKnownGroupChats(env, limit = 20) {
 
   try {
     const result = await env.DB.prepare(
-      `SELECT chat_id,
-              COALESCE(NULLIF(MAX(chat_type), ''), 'GROUP') AS chat_type,
-              COALESCE(NULLIF(MAX(chat_title), ''), chat_id) AS chat_title,
+      `SELECT base.chat_id,
+              COALESCE(NULLIF(MAX(base.chat_type), ''), 'GROUP') AS chat_type,
+              COALESCE(NULLIF(alias.chat_title, ''), NULLIF(MAX(base.chat_title), ''), base.chat_id) AS chat_title,
               MAX(last_seen) AS last_seen
        FROM (
          SELECT chat_id,
@@ -1412,7 +1412,9 @@ async function getKnownGroupChats(env, limit = 20) {
          WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
          GROUP BY chat_id, chat_type, chat_title
        )
-       GROUP BY chat_id
+       AS base
+       LEFT JOIN chat_aliases AS alias ON alias.chat_id = base.chat_id
+       GROUP BY base.chat_id, alias.chat_title
        ORDER BY datetime(last_seen) DESC
        LIMIT ?`
     )
@@ -1424,6 +1426,30 @@ async function getKnownGroupChats(env, limit = 20) {
     console.error("Failed to load known groups:", error);
     return [];
   }
+}
+
+async function saveChatAlias(env, message, targetChat, chatTitle) {
+  if (!env.DB || !targetChat?.chat_id || !chatTitle.trim()) {
+    return;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO chat_aliases
+      (chat_id, chat_title, updated_by_user_id, updated_by_user_name, updated_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       chat_title = excluded.chat_title,
+       updated_by_user_id = excluded.updated_by_user_id,
+       updated_by_user_name = excluded.updated_by_user_name,
+       updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(
+      targetChat.chat_id,
+      chatTitle.trim(),
+      message.from?.id || "",
+      message.from?.display_name || ""
+    )
+    .run();
 }
 
 async function getAdminSelectedChat(env, ownerUserId) {
@@ -1606,6 +1632,32 @@ async function handleAdminTargetCommand(env, message, text) {
     const selected = await getAdminSelectedChat(env, ownerUserId);
 
     return selected ? `Nhóm đang chọn: ${selected.chat_title || selected.chat_id}` : "Bạn chưa chọn nhóm nào. Nhắn: xem nhóm";
+  }
+
+  if (
+    normalized.startsWith("dat ten nhom ") ||
+    normalized.startsWith("đặt tên nhóm ") ||
+    normalized.startsWith("doi ten nhom ") ||
+    normalized.startsWith("đổi tên nhóm ")
+  ) {
+    const { target, groups, index } = await resolveAdminTargetChat(env, message, cleanText);
+    const aliasMatch = cleanText.match(
+      /^(?:đặt tên|dat ten|đổi tên|doi ten)\s+(?:nhóm|nhom|group)\s+(?:đã chọn|da chon|\d{1,2})\s+(?:là|la|=|:)?\s*(.+)$/i
+    );
+    const alias = (aliasMatch?.[1] || "").trim();
+
+    if (!target) {
+      return index ? `Không thấy nhóm số ${index}. Nhắn "xem nhóm" để xem danh sách.` : "Bạn chưa chọn nhóm. Nhắn: xem nhóm, rồi chọn nhóm 1.";
+    }
+
+    if (!alias) {
+      return "Bạn muốn đặt tên nhóm là gì? Ví dụ: đặt tên nhóm 1 là Test PM banhang.";
+    }
+
+    await saveChatAlias(env, message, target, alias);
+    await saveAdminSelectedChat(env, ownerUserId, { ...target, chat_title: alias });
+
+    return `Đã đặt tên nhóm ${target.chat_id.slice(0, 8)}... là: ${alias}`;
   }
 
   const isSendToGroup = normalized.startsWith("gui nhom") || normalized.startsWith("gửi nhóm");
@@ -4031,19 +4083,41 @@ async function handleDashboardData(request, env) {
        LIMIT 60`
     ).all(),
     env.DB.prepare(
-      `SELECT chat_id, chat_type, chat_title, user_name, weather_enabled, weather_time,
-              weather_location, timezone, last_weather_sent_date, updated_at
-       FROM chat_settings
-       ORDER BY datetime(updated_at) DESC
+      `SELECT settings.chat_id,
+              settings.chat_type,
+              COALESCE(NULLIF(alias.chat_title, ''), settings.chat_title) AS chat_title,
+              settings.user_name,
+              settings.weather_enabled,
+              settings.weather_time,
+              settings.weather_location,
+              settings.timezone,
+              settings.last_weather_sent_date,
+              settings.updated_at
+       FROM chat_settings AS settings
+       LEFT JOIN chat_aliases AS alias ON alias.chat_id = settings.chat_id
+       ORDER BY datetime(settings.updated_at) DESC
        LIMIT 60`
     ).all(),
     env.DB.prepare(
-      `SELECT id, chat_id, chat_type, chat_title, user_name, title, due_at_utc, due_local_date,
-              due_local_time, timezone, status, sent_at, created_at, metadata_json
+      `SELECT reminders.id,
+              reminders.chat_id,
+              reminders.chat_type,
+              COALESCE(NULLIF(alias.chat_title, ''), reminders.chat_title) AS chat_title,
+              reminders.user_name,
+              reminders.title,
+              reminders.due_at_utc,
+              reminders.due_local_date,
+              reminders.due_local_time,
+              reminders.timezone,
+              reminders.status,
+              reminders.sent_at,
+              reminders.created_at,
+              reminders.metadata_json
        FROM reminders
+       LEFT JOIN chat_aliases AS alias ON alias.chat_id = reminders.chat_id
        ORDER BY
-         CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-         datetime(due_at_utc) ASC
+         CASE WHEN reminders.status = 'pending' THEN 0 ELSE 1 END,
+         datetime(reminders.due_at_utc) ASC
        LIMIT 80`
     ).all()
   ]);
