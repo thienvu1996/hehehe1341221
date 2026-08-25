@@ -2,7 +2,9 @@
 
 import {
   AlertCircle,
+  BellRing,
   Bot,
+  CalendarClock,
   Camera,
   ChevronLeft,
   ChevronRight,
@@ -93,6 +95,36 @@ type AiUsageRow = {
   created_at: string;
 };
 
+type ChatSettingRow = {
+  chat_id: string;
+  chat_type: string;
+  chat_title: string;
+  user_name: string;
+  weather_enabled: number;
+  weather_time: string;
+  weather_location: string;
+  timezone: string;
+  last_weather_sent_date?: string | null;
+  updated_at: string;
+};
+
+type ReminderRow = {
+  id: string;
+  chat_id: string;
+  chat_type: string;
+  chat_title: string;
+  user_name: string;
+  title: string;
+  due_at_utc: string;
+  due_local_date: string;
+  due_local_time: string;
+  timezone: string;
+  status: string;
+  sent_at?: string | null;
+  created_at: string;
+  metadata?: Record<string, unknown>;
+};
+
 type DashboardData = {
   ok: boolean;
   generated_at: string;
@@ -102,6 +134,8 @@ type DashboardData = {
     searches: number;
     images: number;
     ai_usage: number;
+    chat_settings: number;
+    reminders: number;
   };
   ai_usage?: {
     stats: {
@@ -123,16 +157,19 @@ type DashboardData = {
     links: LinkRow[];
     searches: SearchRow[];
     images: ImageRow[];
+    chat_settings: ChatSettingRow[];
+    reminders: ReminderRow[];
   };
 };
 
-type TabKey = "links" | "searches" | "images" | "messages" | "ai";
+type TabKey = "links" | "searches" | "images" | "messages" | "schedules" | "ai";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Link2 }> = [
   { key: "links", label: "Link nha", icon: Link2 },
   { key: "searches", label: "Cau hoi", icon: Search },
   { key: "images", label: "Anh", icon: ImageIcon },
   { key: "messages", label: "Tin nhan", icon: MessageSquareText },
+  { key: "schedules", label: "Lich", icon: CalendarClock },
   { key: "ai", label: "AI quota", icon: Gauge }
 ];
 
@@ -510,6 +547,190 @@ function MessageList({ messages, query }: { messages: MessageRow[]; query: strin
   );
 }
 
+function getChatLabel(chatTitle?: string, chatId?: string) {
+  if (chatTitle) {
+    return chatTitle;
+  }
+
+  if (!chatId) {
+    return "Chua ro chat";
+  }
+
+  return `Chat ${chatId.slice(0, 8)}...`;
+}
+
+function formatLocalScheduleDate(value?: string | null) {
+  if (!value) {
+    return "Chua gui";
+  }
+
+  const parts = value.split("-");
+
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+
+  return value;
+}
+
+function SchedulePanel({
+  settings,
+  reminders,
+  query
+}: {
+  settings: ChatSettingRow[];
+  reminders: ReminderRow[];
+  query: string;
+}) {
+  const filteredSettings = useMemo(() => {
+    const needle = normalize(query);
+
+    if (!needle) {
+      return settings;
+    }
+
+    return settings.filter((row) =>
+      normalize(`${row.chat_title} ${row.chat_type} ${row.user_name} ${row.weather_location} ${row.weather_time}`).includes(needle)
+    );
+  }, [settings, query]);
+  const filteredReminders = useMemo(() => {
+    const needle = normalize(query);
+
+    if (!needle) {
+      return reminders;
+    }
+
+    return reminders.filter((row) =>
+      normalize(`${row.chat_title} ${row.chat_type} ${row.user_name} ${row.title} ${row.status}`).includes(needle)
+    );
+  }, [reminders, query]);
+  const settingsPage = usePagedRows(filteredSettings, query);
+  const remindersPage = usePagedRows(filteredReminders, query);
+
+  return (
+    <div className="schedule-panel">
+      <section className="schedule-section">
+        <div className="section-head">
+          <div>
+            <p className="record-kicker">Daily weather</p>
+            <h2>Lich thoi tiet</h2>
+          </div>
+          <span className="count-chip">{filteredSettings.length} cau hinh</span>
+        </div>
+        {filteredSettings.length === 0 ? (
+          <EmptyState icon={CalendarClock} title="Chua co lich thoi tiet hop dieu kien" />
+        ) : (
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Chat/group</th>
+                    <th>Trang thai</th>
+                    <th>Gio gui</th>
+                    <th>Dia diem</th>
+                    <th>Lan gui cuoi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {settingsPage.pageRows.map((row) => (
+                    <tr key={row.chat_id}>
+                      <td>
+                        <div className="table-title">{getChatLabel(row.chat_title, row.chat_id)}</div>
+                        <span className="muted">{row.chat_type || "CHAT"}</span>
+                      </td>
+                      <td>
+                        <span className={`status-pill ${row.weather_enabled ? "status-ok" : "status-error"}`}>
+                          {row.weather_enabled ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                          {row.weather_enabled ? "bat" : "tat"}
+                        </span>
+                      </td>
+                      <td>{row.weather_time || "06:00"}</td>
+                      <td>{row.weather_location || "TP Ho Chi Minh"}</td>
+                      <td>
+                        <div>{formatLocalScheduleDate(row.last_weather_sent_date)}</div>
+                        <span className="muted">{formatDate(row.updated_at)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationFooter
+              page={settingsPage.page}
+              totalItems={filteredSettings.length}
+              totalPages={settingsPage.totalPages}
+              onPageChange={settingsPage.setPage}
+            />
+          </>
+        )}
+      </section>
+
+      <section className="schedule-section">
+        <div className="section-head">
+          <div>
+            <p className="record-kicker">One-time reminders</p>
+            <h2>Lich nhac viec</h2>
+          </div>
+          <span className="count-chip">{filteredReminders.length} lich</span>
+        </div>
+        {filteredReminders.length === 0 ? (
+          <EmptyState icon={BellRing} title="Chua co lich nhac viec" />
+        ) : (
+          <>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Viec</th>
+                    <th>Chat/group</th>
+                    <th>Trang thai</th>
+                    <th>Thoi gian</th>
+                    <th>Tao luc</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {remindersPage.pageRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <div className="table-title">{row.title || "Viec da hen"}</div>
+                        <span className="muted">{row.user_name || "Nguoi dung"}</span>
+                      </td>
+                      <td>
+                        <div>{getChatLabel(row.chat_title, row.chat_id)}</div>
+                        <span className="muted">{row.chat_type || "CHAT"}</span>
+                      </td>
+                      <td>
+                        <span className={`status-pill ${row.status === "pending" ? "status-ok" : "status-muted"}`}>
+                          {row.status === "pending" ? <BellRing size={14} /> : <CheckCircle2 size={14} />}
+                          {row.status || "pending"}
+                        </span>
+                      </td>
+                      <td>
+                        <div>
+                          {row.due_local_time || "??:??"} {formatLocalScheduleDate(row.due_local_date)}
+                        </div>
+                        <span className="muted">{row.timezone || "Asia/Ho_Chi_Minh"}</span>
+                      </td>
+                      <td>{formatDate(row.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationFooter
+              page={remindersPage.page}
+              totalItems={filteredReminders.length}
+              totalPages={remindersPage.totalPages}
+              onPageChange={remindersPage.setPage}
+            />
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function AiUsageList({
   usage,
   query,
@@ -743,6 +964,7 @@ export function DashboardApp() {
         <StatTile label="Link da luu" value={data?.counts.links ?? 0} icon={Link2} accent="#22C55E" />
         <StatTile label="Cau search" value={data?.counts.searches ?? 0} icon={Sparkles} accent="#F59E0B" />
         <StatTile label="Anh da doc" value={data?.counts.images ?? 0} icon={ImageIcon} accent="#F472B6" />
+        <StatTile label="Lich" value={data?.counts.reminders ?? 0} icon={CalendarClock} accent="#FB7185" />
         <StatTile label="AI calls" value={data?.counts.ai_usage ?? 0} icon={Gauge} accent="#A78BFA" />
       </section>
 
@@ -791,6 +1013,13 @@ export function DashboardApp() {
           {data && activeTab === "searches" ? <SearchList searches={data.recent.searches} query={query} /> : null}
           {data && activeTab === "images" ? <ImageList images={data.recent.images} query={query} /> : null}
           {data && activeTab === "messages" ? <MessageList messages={data.recent.messages} query={query} /> : null}
+          {data && activeTab === "schedules" ? (
+            <SchedulePanel
+              settings={data.recent.chat_settings ?? []}
+              reminders={data.recent.reminders ?? []}
+              query={query}
+            />
+          ) : null}
           {data && activeTab === "ai" ? (
             <AiUsageList usage={data.ai_usage?.recent ?? []} stats={data.ai_usage?.stats} query={query} />
           ) : null}

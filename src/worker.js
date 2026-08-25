@@ -3963,14 +3963,26 @@ async function handleDashboardData(request, env) {
     return dashboardJson(request, { ok: false, message: "Cloudflare D1 is not configured" }, 500);
   }
 
-  const [countsResult, messagesResult, linksResult, searchesResult, imagesResult, aiStatsResult, aiUsageResult] =
+  const [
+    countsResult,
+    messagesResult,
+    linksResult,
+    searchesResult,
+    imagesResult,
+    aiStatsResult,
+    aiUsageResult,
+    chatSettingsResult,
+    remindersResult
+  ] =
     await Promise.all([
     env.DB.prepare(
       `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
        UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links
        UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches
        UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images
-       UNION ALL SELECT 'ai_usage' AS name, COUNT(*) AS total FROM ai_usage`
+       UNION ALL SELECT 'ai_usage' AS name, COUNT(*) AS total FROM ai_usage
+       UNION ALL SELECT 'chat_settings' AS name, COUNT(*) AS total FROM chat_settings
+       UNION ALL SELECT 'reminders' AS name, COUNT(*) AS total FROM reminders`
     ).all(),
     env.DB.prepare(
       `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json, created_at
@@ -4017,6 +4029,22 @@ async function handleDashboardData(request, env) {
        FROM ai_usage
        ORDER BY datetime(created_at) DESC
        LIMIT 60`
+    ).all(),
+    env.DB.prepare(
+      `SELECT chat_id, chat_type, chat_title, user_name, weather_enabled, weather_time,
+              weather_location, timezone, last_weather_sent_date, updated_at
+       FROM chat_settings
+       ORDER BY datetime(updated_at) DESC
+       LIMIT 60`
+    ).all(),
+    env.DB.prepare(
+      `SELECT id, chat_id, chat_type, chat_title, user_name, title, due_at_utc, due_local_date,
+              due_local_time, timezone, status, sent_at, created_at, metadata_json
+       FROM reminders
+       ORDER BY
+         CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+         datetime(due_at_utc) ASC
+       LIMIT 80`
     ).all()
   ]);
   const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
@@ -4030,7 +4058,9 @@ async function handleDashboardData(request, env) {
       links: counts.links || 0,
       searches: counts.searches || 0,
       images: counts.images || 0,
-      ai_usage: counts.ai_usage || 0
+      ai_usage: counts.ai_usage || 0,
+      chat_settings: counts.chat_settings || 0,
+      reminders: counts.reminders || 0
     },
     ai_usage: {
       stats: {
@@ -4065,6 +4095,11 @@ async function handleDashboardData(request, env) {
         metadata: safeJsonParse(row.metadata_json)
       })),
       images: (imagesResult.results || []).map((row) => ({
+        ...row,
+        metadata: safeJsonParse(row.metadata_json)
+      })),
+      chat_settings: chatSettingsResult.results || [],
+      reminders: (remindersResult.results || []).map((row) => ({
         ...row,
         metadata: safeJsonParse(row.metadata_json)
       }))

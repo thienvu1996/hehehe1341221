@@ -177,7 +177,7 @@ h3 {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 12px;
 }
 
@@ -379,6 +379,11 @@ td {
   background: rgba(239, 68, 68, 0.13);
 }
 
+.status-muted {
+  color: var(--muted-strong);
+  background: rgba(197, 210, 207, 0.1);
+}
+
 .record-list,
 .message-list,
 .image-grid,
@@ -409,6 +414,46 @@ td {
 .error-cell {
   max-width: 280px;
   overflow-wrap: anywhere;
+}
+
+.schedule-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.schedule-section {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(16, 24, 28, 0.72);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(7, 16, 19, 0.64);
+}
+
+.section-head h2 {
+  margin-bottom: 0;
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.count-chip {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  background: rgba(238, 247, 244, 0.05);
 }
 
 .pagination-bar {
