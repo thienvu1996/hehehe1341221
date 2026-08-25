@@ -7,7 +7,7 @@ workers_dev = true
 enabled = true
 
 [triggers]
-crons = ["0 23 * * *"]
+crons = ["*/15 * * * *"]
 
 [[routes]]
 pattern = "bot.jean1331.io.vn"

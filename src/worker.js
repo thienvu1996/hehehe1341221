@@ -14,6 +14,9 @@ const DEFAULT_WEATHER_PLACE = {
   longitude: 106.6297,
   source: "default"
 };
+const DEFAULT_WEATHER_TIME = "06:00";
+const DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh";
+const SCHEDULE_INTERVAL_MINUTES = 15;
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -459,6 +462,257 @@ function answerDashboardKey(env, message) {
     "Nếu domain chưa vào được, dùng:",
     "https://hehehe1341221-dashboard.vuthien616.workers.dev"
   ].join("\n");
+}
+
+function normalizeScheduleMinute(hour, minute) {
+  let normalizedHour = hour;
+  let normalizedMinute = Math.ceil(minute / SCHEDULE_INTERVAL_MINUTES) * SCHEDULE_INTERVAL_MINUTES;
+
+  if (normalizedMinute >= 60) {
+    normalizedHour = (normalizedHour + 1) % 24;
+    normalizedMinute = 0;
+  }
+
+  return `${String(normalizedHour).padStart(2, "0")}:${String(normalizedMinute).padStart(2, "0")}`;
+}
+
+function parseScheduleTime(text) {
+  const normalized = normalizeText(text);
+  const match =
+    normalized.match(/\b(?:luc|vao|moi ngay|hang ngay)?\s*(\d{1,2})\s*(?::|h|gio)\s*(\d{1,2})?\s*(am|pm)?\b/) ||
+    normalized.match(/\b(\d{1,2})\s*(am|pm)\b/);
+
+  if (!match) {
+    return DEFAULT_WEATHER_TIME;
+  }
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = match[3] || "";
+
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 24 || minute < 0 || minute > 59) {
+    return DEFAULT_WEATHER_TIME;
+  }
+
+  if (meridiem === "pm" && hour < 12) {
+    hour += 12;
+  } else if (meridiem === "am" && hour === 12) {
+    hour = 0;
+  }
+
+  if (hour === 24) {
+    hour = 0;
+  }
+
+  return normalizeScheduleMinute(hour, minute);
+}
+
+function normalizeLocationName(text) {
+  const normalized = normalizeText(text);
+
+  if (
+    normalized.includes("hcm") ||
+    normalized.includes("tphcm") ||
+    normalized.includes("ho chi minh") ||
+    normalized.includes("sai gon")
+  ) {
+    return "TP Ho Chi Minh";
+  }
+
+  if (normalized.includes("quan 12") || normalized.includes("q12")) {
+    return "Quận 12, TP Ho Chi Minh";
+  }
+
+  if (normalized.includes("an phu dong") || normalized.includes("an thoi dong")) {
+    return "An Phú Đông, Quận 12, TP Ho Chi Minh";
+  }
+
+  return String(text || "").trim();
+}
+
+function parseWeatherSettingsCommand(text, message) {
+  const cleanText = getCleanQuestion(text, message.chat?.title || "");
+  const normalized = normalizeText(cleanText);
+  const asksSettings =
+    normalized.includes("xem cai dat") ||
+    normalized.includes("xem cau hinh") ||
+    normalized.includes("cau hinh bot") ||
+    normalized.includes("setting") ||
+    normalized.includes("settings") ||
+    normalized.includes("lich thoi tiet");
+
+  if (asksSettings) {
+    return { action: "show" };
+  }
+
+  const mentionsWeather = normalized.includes("thoi tiet") || normalized.includes("du bao");
+  const disable =
+    mentionsWeather &&
+    (normalized.includes("tat ") ||
+      normalized.startsWith("tat") ||
+      normalized.includes("dung gui") ||
+      normalized.includes("huy lich") ||
+      normalized.includes("bo lich"));
+
+  if (disable) {
+    return { action: "disable" };
+  }
+
+  const enable =
+    mentionsWeather &&
+    (normalized.includes("cai ") ||
+      normalized.startsWith("cai") ||
+      normalized.includes("set ") ||
+      normalized.startsWith("set") ||
+      normalized.includes("bat ") ||
+      normalized.startsWith("bat") ||
+      normalized.includes("hen ") ||
+      normalized.startsWith("hen") ||
+      normalized.includes("nhac ") ||
+      normalized.includes("gui "));
+
+  if (!enable) {
+    return null;
+  }
+
+  const time = parseScheduleTime(cleanText);
+  const originalTimeMatch = cleanText.match(
+    /\b(?:lúc|luc|vào|vao|mỗi ngày|moi ngay|hằng ngày|hang ngay)?\s*\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm)?\b/i
+  );
+  const withoutTime = cleanText.replace(/\b(?:lúc|luc|vào|vao|mỗi ngày|moi ngay|hằng ngày|hang ngay)?\s*\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm)?\b/gi, " ");
+  const locationAfterTime = originalTimeMatch
+    ? cleanText.slice(originalTimeMatch.index + originalTimeMatch[0].length).trim()
+    : "";
+  const locationCandidate = (locationAfterTime || withoutTime)
+    .replace(
+      /\b(cài đặt|cài|set|bật|mở|hen|hẹn|nhắc|gửi|lịch|thời tiết|du bao|dự báo|mỗi ngày|hằng ngày|moi ngay|hang ngay|cho|tại|ở|o)\b/gi,
+      " "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  const location = normalizeLocationName(locationCandidate) || DEFAULT_WEATHER_PLACE.name;
+
+  return {
+    action: "enable",
+    time,
+    location
+  };
+}
+
+async function getChatSettings(env, chatId) {
+  if (!env.DB || !chatId) {
+    return null;
+  }
+
+  try {
+    return await env.DB.prepare(
+      `SELECT chat_id, chat_type, chat_title, user_id, user_name, weather_enabled,
+              weather_time, weather_location, timezone, last_weather_sent_date, updated_at
+       FROM chat_settings
+       WHERE chat_id = ?
+       LIMIT 1`
+    )
+      .bind(chatId)
+      .first();
+  } catch (error) {
+    console.error("Failed to read chat settings:", error);
+    return null;
+  }
+}
+
+function formatChatSettings(settings, chatType = "") {
+  if (!settings) {
+    return [
+      "Nhóm/chat này chưa cài lịch riêng.",
+      `Mặc định gợi ý: thời tiết ${DEFAULT_WEATHER_TIME} tại ${DEFAULT_WEATHER_PLACE.name}.`,
+      "",
+      "Ví dụ:",
+      `@${DEFAULT_BOT_DISPLAY_NAME} cài gửi thời tiết 6h HCM`
+    ].join("\n");
+  }
+
+  const enabled = Number(settings.weather_enabled || 0) === 1 ? "đang bật" : "đang tắt";
+  const scope = normalizeText(chatType || settings.chat_type).includes("private") ? "chat riêng này" : "nhóm này";
+
+  return [
+    `Cài đặt của ${scope}:`,
+    `- Thời tiết: ${enabled}`,
+    `- Giờ gửi: ${settings.weather_time || DEFAULT_WEATHER_TIME}`,
+    `- Địa điểm: ${settings.weather_location || DEFAULT_WEATHER_PLACE.name}`,
+    `- Múi giờ: ${settings.timezone || DEFAULT_TIMEZONE}`,
+    "",
+    "Lệnh nhanh:",
+    `@${DEFAULT_BOT_DISPLAY_NAME} cài gửi thời tiết 6h HCM`,
+    `@${DEFAULT_BOT_DISPLAY_NAME} tắt thời tiết`
+  ].join("\n");
+}
+
+async function saveChatWeatherSettings(env, message, parsed) {
+  const chatId = message.chat?.id || "";
+
+  if (!env.DB || !chatId) {
+    return "Chưa cấu hình database nên chưa lưu được cài đặt.";
+  }
+
+  const existing = await getChatSettings(env, chatId);
+  const weatherEnabled = parsed.action === "disable" ? 0 : 1;
+  const weatherTime = parsed.time || existing?.weather_time || DEFAULT_WEATHER_TIME;
+  const weatherLocation = parsed.location || existing?.weather_location || env.DEFAULT_WEATHER_LOCATION || DEFAULT_WEATHER_PLACE.name;
+  const timezone = existing?.timezone || DEFAULT_TIMEZONE;
+
+  await env.DB.prepare(
+    `INSERT INTO chat_settings
+      (chat_id, chat_type, chat_title, user_id, user_name, weather_enabled, weather_time,
+       weather_location, timezone, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       chat_type = excluded.chat_type,
+       chat_title = excluded.chat_title,
+       user_id = excluded.user_id,
+       user_name = excluded.user_name,
+       weather_enabled = excluded.weather_enabled,
+       weather_time = excluded.weather_time,
+       weather_location = excluded.weather_location,
+       timezone = excluded.timezone,
+       updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(
+      chatId,
+      message.chat?.chat_type || "",
+      message.chat?.title || "",
+      message.from?.id || "",
+      message.from?.display_name || "",
+      weatherEnabled,
+      weatherTime,
+      weatherLocation,
+      timezone
+    )
+    .run();
+
+  if (parsed.action === "disable") {
+    return `Đã tắt lịch gửi thời tiết cho ${isPrivateChat(message) ? "chat riêng này" : "nhóm này"}.`;
+  }
+
+  return [
+    `Đã bật lịch thời tiết cho ${isPrivateChat(message) ? "chat riêng này" : "nhóm này"}.`,
+    `Giờ gửi: ${weatherTime}`,
+    `Địa điểm: ${weatherLocation}`,
+    "Bot sẽ kiểm tra lịch mỗi 15 phút và chỉ gửi 1 lần/ngày."
+  ].join("\n");
+}
+
+async function handleSettingsCommand(env, message, text) {
+  const parsed = parseWeatherSettingsCommand(text, message);
+
+  if (!parsed) {
+    return null;
+  }
+
+  if (parsed.action === "show") {
+    return formatChatSettings(await getChatSettings(env, message.chat?.id || ""), message.chat?.chat_type || "");
+  }
+
+  return saveChatWeatherSettings(env, message, parsed);
 }
 
 function buildMessageMetadata(message, eventName = "message.received") {
@@ -1847,6 +2101,8 @@ function getHelpText() {
     "- Hỏi: link nào lỗi?",
     "- Hỏi: có thông tin trong nhóm chưa?",
     "- Hỏi: thời tiết hôm nay sao?",
+    "- Cài lịch thời tiết: @Bot Thu Thập atess cài gửi thời tiết 6h HCM",
+    "- Xem/tắt lịch: @Bot Thu Thập atess xem cài đặt / tắt thời tiết",
     "- Hỏi tự nhiên như: cái này là gì / nên làm sao / tóm tắt giúp",
     "- Gửi ảnh bản đồ kèm caption: Tâm Ga Bình Triệu, bán kính 2km, tìm nhà dưới 10tr",
     "- Hỏi: tìm phòng dưới 5 triệu / quận 7 / gần trường..."
@@ -1993,6 +2249,12 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
 
   if (!env.DB) {
     return getReplyText(message);
+  }
+
+  const settingsReply = await handleSettingsCommand(env, message, text);
+
+  if (settingsReply) {
+    return settingsReply;
   }
 
   if (urls.length > 0) {
@@ -2340,12 +2602,12 @@ function getDailyWeatherChatIds(env) {
   return getOwnerUserIds(env);
 }
 
-function buildSystemMessage(chatId, chatType = "PRIVATE") {
+function buildSystemMessage(chatId, chatType = "PRIVATE", options = {}) {
   return {
     chat: {
       id: chatId,
       chat_type: chatType,
-      title: ""
+      title: options.chatTitle || ""
     },
     from: {
       id: "system",
@@ -2354,6 +2616,133 @@ function buildSystemMessage(chatId, chatType = "PRIVATE") {
     message_id: `daily-weather-${Date.now()}-${chatId}`,
     date: Math.floor(Date.now() / 1000),
     text: ""
+  };
+}
+
+function getZonedDateTimeParts(date = new Date(), timeZone = DEFAULT_TIMEZONE) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+    totalMinutes: Number(parts.hour) * 60 + Number(parts.minute)
+  };
+}
+
+function scheduleTimeToMinutes(time) {
+  const match = String(time || "").match(/^(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function isWeatherScheduleDue(setting, date = new Date()) {
+  const timeZone = setting.timezone || DEFAULT_TIMEZONE;
+  const now = getZonedDateTimeParts(date, timeZone);
+  const targetMinutes = scheduleTimeToMinutes(setting.weather_time || DEFAULT_WEATHER_TIME);
+
+  if (targetMinutes === null || setting.last_weather_sent_date === now.date) {
+    return false;
+  }
+
+  const delta = now.totalMinutes - targetMinutes;
+
+  return delta >= 0 && delta < SCHEDULE_INTERVAL_MINUTES;
+}
+
+async function getWeatherScheduleSettings(env) {
+  if (!env.DB) {
+    return [];
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT chat_id, chat_type, chat_title, user_id, user_name, weather_enabled,
+              weather_time, weather_location, timezone, last_weather_sent_date
+       FROM chat_settings
+       WHERE weather_enabled = 1`
+    ).all();
+
+    return result.results || [];
+  } catch (error) {
+    console.error("Failed to load weather schedules:", error);
+    return [];
+  }
+}
+
+async function markWeatherScheduleSent(env, chatId, sentDate) {
+  if (!env.DB || !chatId || !sentDate) {
+    return;
+  }
+
+  try {
+    await env.DB.prepare(
+      `UPDATE chat_settings
+       SET last_weather_sent_date = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE chat_id = ?`
+    )
+      .bind(sentDate, chatId)
+      .run();
+  } catch (error) {
+    console.error("Failed to mark weather schedule sent:", error);
+  }
+}
+
+async function sendDueWeatherSchedules(env, options = {}) {
+  const nowDate = new Date(options.scheduledTime || Date.now());
+  const settings = await getWeatherScheduleSettings(env);
+  const dueSettings = settings.filter((setting) => isWeatherScheduleDue(setting, nowDate));
+  const results = [];
+
+  for (const setting of dueSettings) {
+    const timeZone = setting.timezone || DEFAULT_TIMEZONE;
+    const localNow = getZonedDateTimeParts(nowDate, timeZone);
+    const syntheticMessage = buildSystemMessage(setting.chat_id, setting.chat_type || "PRIVATE", {
+      chatTitle: setting.chat_title || ""
+    });
+    const location = setting.weather_location || env.DEFAULT_WEATHER_LOCATION || DEFAULT_WEATHER_PLACE.name;
+
+    try {
+      const weatherText = await answerWeatherQuestion(env, syntheticMessage, `thời tiết ${location}`);
+      await sendChatAction(env, setting.chat_id, "typing");
+      await sendMessage(env, setting.chat_id, `Bản tin thời tiết ${setting.weather_time || DEFAULT_WEATHER_TIME}:\n${weatherText}`);
+      await markWeatherScheduleSent(env, setting.chat_id, localNow.date);
+      results.push({ chat_id: setting.chat_id, ok: true, date: localNow.date });
+    } catch (error) {
+      console.error("Failed to send configured weather schedule:", error);
+      results.push({
+        chat_id: setting.chat_id,
+        ok: false,
+        error: String(error?.message || error)
+      });
+    }
+  }
+
+  return {
+    ok: results.some((result) => result.ok),
+    checked: settings.length,
+    due: dueSettings.length,
+    sent: results.filter((result) => result.ok).length,
+    results
   };
 }
 
@@ -2711,8 +3100,8 @@ export default {
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil(
-      sendDailyWeather(env, { scheduledTime: event.scheduledTime }).catch((error) => {
-        console.error("Scheduled daily weather failed:", error);
+      sendDueWeatherSchedules(env, { scheduledTime: event.scheduledTime }).catch((error) => {
+        console.error("Scheduled weather settings failed:", error);
       })
     );
   }
