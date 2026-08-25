@@ -4,8 +4,16 @@ const botToken = process.env.ZALO_BOT_TOKEN;
 const webhookUrl = process.env.WEBHOOK_URL;
 const secretToken = process.env.WEBHOOK_SECRET_TOKEN;
 
-if (!botToken || !webhookUrl || !secretToken) {
-  console.error("Missing required env: ZALO_BOT_TOKEN, WEBHOOK_URL, WEBHOOK_SECRET_TOKEN");
+const missingEnv = [
+  ["ZALO_BOT_TOKEN", botToken],
+  ["WEBHOOK_URL", webhookUrl],
+  ["WEBHOOK_SECRET_TOKEN", secretToken]
+]
+  .filter(([, value]) => !value)
+  .map(([name]) => name);
+
+if (missingEnv.length > 0) {
+  console.error(`Missing required env: ${missingEnv.join(", ")}`);
   process.exit(1);
 }
 

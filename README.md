@@ -53,6 +53,16 @@ npm run register-webhook
 npm run test-webhook
 ```
 
+Hoac dung endpoint admin tren Worker neu token chi duoc luu trong Cloudflare secrets:
+
+```bash
+curl -X POST "https://hehehe1341221.<ten-account>.workers.dev/admin/register-webhook" \
+  -H "X-Bot-Api-Secret-Token: chuoi-bi-mat-ban-da-set-tren-cloudflare"
+
+curl -X POST "https://hehehe1341221.<ten-account>.workers.dev/admin/test-webhook" \
+  -H "X-Bot-Api-Secret-Token: chuoi-bi-mat-ban-da-set-tren-cloudflare"
+```
+
 ## Chay local
 
 ```bash

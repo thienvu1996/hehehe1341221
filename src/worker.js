@@ -94,6 +94,49 @@ async function handleWebhook(request, env) {
   return json({ message: "Success" });
 }
 
+function authorizeAdminRequest(request, env) {
+  if (!env.WEBHOOK_SECRET_TOKEN) {
+    return json({ message: "Server is missing WEBHOOK_SECRET_TOKEN" }, 500);
+  }
+
+  const secretToken = request.headers.get("x-bot-api-secret-token") || "";
+
+  if (!constantTimeEqual(secretToken, env.WEBHOOK_SECRET_TOKEN)) {
+    return json({ message: "Unauthorized" }, 403);
+  }
+
+  return null;
+}
+
+async function handleRegisterWebhook(request, env) {
+  const unauthorizedResponse = authorizeAdminRequest(request, env);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
+  const url = new URL(request.url);
+  const webhookUrl = `${url.origin}/webhook`;
+  const data = await callZaloApi(env, "setWebhook", {
+    url: webhookUrl,
+    secret_token: env.WEBHOOK_SECRET_TOKEN
+  });
+
+  return json(data);
+}
+
+async function handleTestWebhook(request, env) {
+  const unauthorizedResponse = authorizeAdminRequest(request, env);
+
+  if (unauthorizedResponse) {
+    return unauthorizedResponse;
+  }
+
+  const data = await callZaloApi(env, "testWebhook");
+
+  return json(data);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -112,6 +155,14 @@ export default {
 
     if (request.method === "POST" && ["/webhook", "/webhooks"].includes(url.pathname)) {
       return handleWebhook(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/register-webhook") {
+      return handleRegisterWebhook(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
+      return handleTestWebhook(request, env);
     }
 
     return json({ message: "Not Found" }, 404);
