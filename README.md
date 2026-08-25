@@ -1,6 +1,57 @@
 # hehehe1341221
 
-Webhook Node.js cho Zalo Bot Platform.
+Webhook cho Zalo Bot Platform. Repo nay ho tro 2 cach chay:
+
+- Cloudflare Workers: nen dung de deploy free lau dai.
+- Node.js Express: dung test local hoac deploy len VPS/Render/Railway.
+
+## Deploy Cloudflare Workers
+
+Dang nhap Cloudflare:
+
+```bash
+npx wrangler login
+```
+
+Set secrets cho Worker:
+
+```bash
+npx wrangler secret put ZALO_BOT_TOKEN
+npx wrangler secret put WEBHOOK_SECRET_TOKEN
+```
+
+Deploy:
+
+```bash
+npm run deploy
+```
+
+Sau khi deploy xong, Cloudflare se hien URL dang:
+
+```text
+https://hehehe1341221.<ten-account>.workers.dev
+```
+
+Webhook URL de dang ky voi Zalo:
+
+```text
+https://hehehe1341221.<ten-account>.workers.dev/webhook
+```
+
+Cap nhat `.env` o may local de dang ky webhook:
+
+```env
+ZALO_BOT_TOKEN=token-bot-cua-ban
+WEBHOOK_SECRET_TOKEN=chuoi-bi-mat-ban-da-set-tren-cloudflare
+WEBHOOK_URL=https://hehehe1341221.<ten-account>.workers.dev/webhook
+```
+
+Dang ky va test webhook:
+
+```bash
+npm run register-webhook
+npm run test-webhook
+```
 
 ## Chay local
 

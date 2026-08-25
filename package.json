@@ -1,12 +1,14 @@
 {
   "name": "hehehe1341221",
   "version": "1.0.0",
-  "description": "Zalo Bot webhook server",
+  "description": "Zalo Bot webhook server for Node.js and Cloudflare Workers",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "worker:dev": "wrangler dev",
+    "deploy": "wrangler deploy",
     "register-webhook": "node scripts/register-webhook.js",
     "test-webhook": "node scripts/test-webhook.js"
   },
@@ -20,5 +22,8 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.29.1"
   }
 }
