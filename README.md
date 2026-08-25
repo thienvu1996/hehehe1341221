@@ -137,6 +137,13 @@ npx wrangler secret put OWNER_ZALO_USER_IDS
 Gia tri la mot hoac nhieu Zalo user id, ngan cach bang dau phay. Trong group, bot van chi tra loi
 theo du lieu cua group do. Trong tin nhan rieng cua admin, bot co the tong hop toan bo D1.
 Khong nen gui `DASHBOARD_TOKEN` qua Zalo vi day la khoa xem dashboard rieng.
+Neu chap nhan gui qua Zalo, admin co the nhan rieng voi bot dung lenh chinh xac:
+
+```text
+KEY_Dashboard
+```
+
+Lenh nay chi hoat dong trong tin nhan rieng cua user id nam trong `OWNER_ZALO_USER_IDS`.
 
 ## Anh ban do va Google Search
 

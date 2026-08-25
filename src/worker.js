@@ -176,6 +176,38 @@ function isOwnerMessage(env, message) {
   return ownerIds.includes(String(message.from?.id || ""));
 }
 
+function wantsDashboardKey(text) {
+  return normalizeText(text).replace(/[\s-]+/g, "_").includes("key_dashboard");
+}
+
+function answerDashboardKey(env, message) {
+  if (!wantsDashboardKey(getMessageText(message))) {
+    return null;
+  }
+
+  if (!isPrivateChat(message)) {
+    return "Lenh KEY_Dashboard chi dung trong tin nhan rieng voi bot, khong gui key trong group.";
+  }
+
+  if (!isOwnerMessage(env, message)) {
+    return "Tai khoan nay khong co quyen lay dashboard key.";
+  }
+
+  if (!env.DASHBOARD_TOKEN) {
+    return "Worker chua co DASHBOARD_TOKEN.";
+  }
+
+  return [
+    "Dashboard key:",
+    env.DASHBOARD_TOKEN,
+    "",
+    "Mo dashboard:",
+    "https://dashboard.jean1331.io.vn",
+    "Neu domain chua vao duoc, dung:",
+    "https://hehehe1341221-dashboard.vuthien616.workers.dev"
+  ].join("\n");
+}
+
 function buildMessageMetadata(message, eventName = "message.received") {
   const text = redactSensitiveText(getMessageText(message));
   const urls = extractUrls(text);
@@ -918,6 +950,12 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
   const urls = extractUrls(text);
 
   await saveMessage(env, message, eventName);
+
+  const dashboardKeyReply = answerDashboardKey(env, message);
+
+  if (dashboardKeyReply) {
+    return dashboardKeyReply;
+  }
 
   if (!env.DB) {
     return getReplyText(message);
