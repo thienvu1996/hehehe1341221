@@ -119,14 +119,14 @@ function getReplyText(message) {
   const text = String(message?.text || "").trim();
 
   if (!text) {
-    return "Bot da nhan duoc tin nhan cua ban.";
+    return "Bot đã nhận được tin nhắn của bạn.";
   }
 
   if (/^(hi|hello|chao|xin chao|\/start)$/i.test(text)) {
-    return "Xin chao! Webhook Zalo Bot da hoat dong.";
+    return "Xin chào! Webhook Zalo Bot đã hoạt động.";
   }
 
-  return `Ban vua gui: ${text}`;
+  return `Bạn vừa gửi: ${text}`;
 }
 
 function redactSensitiveText(text) {
@@ -439,24 +439,24 @@ function answerDashboardKey(env, message) {
   }
 
   if (!isPrivateChat(message)) {
-    return "Lenh KEY_Dashboard chi dung trong tin nhan rieng voi bot, khong gui key trong group.";
+    return "Lệnh KEY_Dashboard chỉ dùng trong tin nhắn riêng với bot, không gửi key trong group.";
   }
 
   if (!isOwnerMessage(env, message)) {
-    return "Tai khoan nay khong co quyen lay dashboard key.";
+    return "Tài khoản này không có quyền lấy dashboard key.";
   }
 
   if (!env.DASHBOARD_TOKEN) {
-    return "Worker chua co DASHBOARD_TOKEN.";
+    return "Worker chưa có DASHBOARD_TOKEN.";
   }
 
   return [
     "Dashboard key:",
     env.DASHBOARD_TOKEN,
     "",
-    "Mo dashboard:",
+    "Mở dashboard:",
     "https://dashboard.jean1331.io.vn",
-    "Neu domain chua vao duoc, dung:",
+    "Nếu domain chưa vào được, dùng:",
     "https://hehehe1341221-dashboard.vuthien616.workers.dev"
   ].join("\n");
 }
@@ -699,27 +699,27 @@ function enrichLiveQuery(env, question) {
 
 function getWeatherCodeLabel(code) {
   const labels = {
-    0: "troi quang",
-    1: "it may",
-    2: "may rai rac",
-    3: "nhieu may",
-    45: "suong mu",
-    48: "suong mu dong bang",
-    51: "mua phun nhe",
-    53: "mua phun vua",
-    55: "mua phun nang",
-    61: "mua nhe",
-    63: "mua vua",
-    65: "mua nang",
-    80: "mua rao nhe",
-    81: "mua rao vua",
-    82: "mua rao manh",
-    95: "co dong",
-    96: "dong kem mua da nhe",
-    99: "dong kem mua da manh"
+    0: "trời quang",
+    1: "ít mây",
+    2: "mây rải rác",
+    3: "nhiều mây",
+    45: "sương mù",
+    48: "sương mù đóng băng",
+    51: "mưa phùn nhẹ",
+    53: "mưa phùn vừa",
+    55: "mưa phùn nặng",
+    61: "mưa nhẹ",
+    63: "mưa vừa",
+    65: "mưa nặng",
+    80: "mưa rào nhẹ",
+    81: "mưa rào vừa",
+    82: "mưa rào mạnh",
+    95: "có dông",
+    96: "dông kèm mưa đá nhẹ",
+    99: "dông kèm mưa đá mạnh"
   };
 
-  return labels[code] || "chua ro hien tuong";
+  return labels[code] || "chưa rõ hiện tượng";
 }
 
 function getWeatherPlaceFromText(env, text) {
@@ -842,8 +842,8 @@ async function answerWeatherQuestion(env, message, question) {
   const rainLine =
     nextRainProbability === null
       ? ""
-      : `\nXac suat mua cao nhat 6 gio toi: ${Math.round(nextRainProbability)}%.`;
-  const sourceLine = place.source === "default_fallback" ? "\nKhong tim ro dia diem, minh tam dung TP HCM." : "";
+      : `\nXác suất mưa cao nhất 6 giờ tới: ${Math.round(nextRainProbability)}%.`;
+  const sourceLine = place.source === "default_fallback" ? "\nKhông tìm rõ địa điểm, mình tạm dùng TP HCM." : "";
 
   if (env.DB) {
     await saveSearch(env, message, `weather:${place.name}`, `Open-Meteo ${current.time || ""}`, [
@@ -852,9 +852,9 @@ async function answerWeatherQuestion(env, message, question) {
   }
 
   return limitText(
-    `Thoi tiet ${place.name} luc ${current.time || "hien tai"}: ${getWeatherCodeLabel(Number(current.weather_code))}.\n` +
-      `Nhiet do ${Math.round(Number(current.temperature_2m))}C, cam giac ${Math.round(Number(current.apparent_temperature))}C.\n` +
-      `Do am ${Math.round(Number(current.relative_humidity_2m))}%, gio ${Math.round(Number(current.wind_speed_10m))} km/h, mua hien tai ${Number(current.precipitation || 0)} mm.` +
+    `Thời tiết ${place.name} lúc ${current.time || "hiện tại"}: ${getWeatherCodeLabel(Number(current.weather_code))}.\n` +
+      `Nhiệt độ ${Math.round(Number(current.temperature_2m))}C, cảm giác ${Math.round(Number(current.apparent_temperature))}C.\n` +
+      `Độ ẩm ${Math.round(Number(current.relative_humidity_2m))}%, gió ${Math.round(Number(current.wind_speed_10m))} km/h, mưa hiện tại ${Number(current.precipitation || 0)} mm.` +
       rainLine +
       sourceLine
   );
@@ -1121,13 +1121,13 @@ async function askGeminiInteraction(env, input, options = {}) {
 
 async function searchWeb(env, query, message = null) {
   const prompt = `
-Ban la tro ly trong nhom Zalo.
-Hay tim web bang Google Search va tra loi ngan gon bang tieng Viet khong dau.
+Bạn là trợ lý trong nhóm Zalo.
+Hãy tìm web bằng Google Search và trả lời ngắn gọn bằng tiếng Việt có dấu.
 Uu tien thong tin moi, dung dieu kien trong cau hoi, va co link nguon.
-Neu cau hoi ve nha thue, hay uu tien gia, khu vuc, ban kinh, tinh trang link.
-Neu cau hoi ve thoi tiet, hay dua nhiet do, mua/nang, va goi y hanh dong ngan gon.
+Nếu câu hỏi về nhà thuê, hãy ưu tiên giá, khu vực, bán kính, tình trạng link.
+Nếu câu hỏi về thời tiết, hãy đưa nhiệt độ, mưa/nắng, và gợi ý hành động ngắn gọn.
 
-Cau hoi: ${query}
+Câu hỏi: ${query}
 `;
   const result = await askGeminiInteraction(env, prompt, {
     tools: [{ type: "google_search" }],
@@ -1169,24 +1169,24 @@ async function saveSearch(env, message, query, answer, sources) {
 async function summarizeRentalLink(env, message, url, sourceText, urlInfo) {
   if (!env.GEMINI_API_KEY) {
     return {
-      summary: urlInfo.title || urlInfo.description || "Da luu link. Chua co GEMINI_API_KEY de tom tat.",
+      summary: urlInfo.title || urlInfo.description || "Đã lưu link. Chưa có GEMINI_API_KEY để tóm tắt.",
       priceText: "",
       areaText: ""
     };
   }
 
   const prompt = `
-Ban la tro ly thu thap link thue nha trong nhom Zalo.
-Hay tom tat ngan gon bang tieng Viet khong dau, chi dung thong tin co trong input.
-Neu khong thay gia/khu vuc thi ghi "chua ro".
+Bạn là trợ lý thu thập link thuê nhà trong nhóm Zalo.
+Hãy tóm tắt ngắn gọn bằng tiếng Việt có dấu, chỉ dùng thông tin có trong input.
+Nếu không thấy giá/khu vực thì ghi "chưa rõ".
 
 Tra ve JSON hop le voi cac key:
-summary: tom tat 1-2 cau
-price_text: gia thue neu co
-area_text: khu vuc/dia chi neu co
+summary: tóm tắt 1-2 câu
+price_text: giá thuê nếu có
+area_text: khu vực/địa chỉ nếu có
 
 URL: ${url}
-Tin nhan nguoi dung: ${sourceText}
+Tin nhắn người dùng: ${sourceText}
 Tieu de: ${urlInfo.title}
 Mo ta: ${urlInfo.description}
 Noi dung trang: ${urlInfo.plainText}
@@ -1376,13 +1376,13 @@ async function getBrokenLinks(env, chatId, limit = 10) {
 
 function formatLinkList(links) {
   if (links.length === 0) {
-    return "Chua co link nao duoc luu trong chat nay.";
+    return "Chưa có link nào được lưu trong chat này.";
   }
 
   return links
     .map((link, index) => {
       const details = [link.price_text, link.area_text].filter(Boolean).join(" | ");
-      return `${index + 1}. ${link.summary || link.title || "Link thue nha"}${details ? ` (${details})` : ""}\n${link.url}`;
+      return `${index + 1}. ${link.summary || link.title || "Link thuê nhà"}${details ? ` (${details})` : ""}\n${link.url}`;
     })
     .join("\n\n");
 }
@@ -1514,40 +1514,40 @@ async function getGlobalContext(env) {
   };
 }
 
-function formatChatContextFallback(context, scopeLabel = "nhom nay") {
+function formatChatContextFallback(context, scopeLabel = "nhóm này") {
   const lines = [
-    `Trong ${scopeLabel} bot da luu: ${context.counts.messages} tin nhan, ${context.counts.links} link, ${context.counts.searches} cau search, ${context.counts.images} anh.`
+    `Trong ${scopeLabel} bot đã lưu: ${context.counts.messages} tin nhắn, ${context.counts.links} link, ${context.counts.searches} câu search, ${context.counts.images} ảnh.`
   ];
 
   if (context.chats?.length > 0) {
     lines.push(
-      `\nChat co du lieu:\n${context.chats
+      `\nChat có dữ liệu:\n${context.chats
         .slice(0, 5)
-        .map((chat, index) => `${index + 1}. ${chat.chat_type || "CHAT"}: ${chat.message_count} tin nhan`)
+        .map((chat, index) => `${index + 1}. ${chat.chat_type || "CHAT"}: ${chat.message_count} tin nhắn`)
         .join("\n")}`
     );
   }
 
   if (context.links.length > 0) {
-    lines.push(`\nLink gan nhat:\n${formatLinkList(context.links.slice(0, 5))}`);
+    lines.push(`\nLink gần nhất:\n${formatLinkList(context.links.slice(0, 5))}`);
   } else {
-    lines.push(`\nChua co link thue nha nao duoc luu trong ${scopeLabel}.`);
+    lines.push(`\nChưa có link thuê nhà nào được lưu trong ${scopeLabel}.`);
   }
 
   if (context.messages.length > 0) {
     lines.push(
-      `\nTin nhan gan nhat:\n${context.messages
+      `\nTin nhắn gần nhất:\n${context.messages
         .slice(0, 5)
-        .map((message, index) => `${index + 1}. ${message.user_name || "Nguoi dung"}: ${limitText(message.text, 90)}`)
+        .map((message, index) => `${index + 1}. ${message.user_name || "Người dùng"}: ${limitText(message.text, 90)}`)
         .join("\n")}`
     );
   }
 
   if (context.images.length > 0) {
     lines.push(
-      `\nAnh gan nhat:\n${context.images
+      `\nẢnh gần nhất:\n${context.images
         .slice(0, 3)
-        .map((image, index) => `${index + 1}. ${image.caption || image.analysis || "Anh khong co caption"}`)
+        .map((image, index) => `${index + 1}. ${image.caption || image.analysis || "Ảnh không có caption"}`)
         .join("\n")}`
     );
   }
@@ -1559,10 +1559,10 @@ async function answerContextQuestion(env, message, question) {
   const chatId = message.chat?.id || "";
   const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
   const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, chatId);
-  const scopeLabel = canViewGlobal ? "tat ca chat/group" : isPrivateChat(message) ? "chat rieng nay" : "nhom nay";
+  const scopeLabel = canViewGlobal ? "tất cả chat/group" : isPrivateChat(message) ? "chat riêng này" : "nhóm này";
 
   if (isPrivateChat(message) && !canViewGlobal && getOwnerUserIds(env).length > 0) {
-    return "Tin nhan rieng chi cho admin xem tong du lieu. Tai khoan nay chua nam trong OWNER_ZALO_USER_IDS.";
+    return "Tin nhắn riêng chỉ cho admin xem tổng dữ liệu. Tài khoản này chưa nằm trong OWNER_ZALO_USER_IDS.";
   }
 
   if (!env.GEMINI_API_KEY) {
@@ -1610,14 +1610,14 @@ async function answerContextQuestion(env, message, question) {
     }))
   };
   const prompt = `
-Ban la bot quan ly thong tin trong Zalo.
-Tra loi ngan gon bang tieng Viet khong dau.
-Hay dua tren context da luu trong D1: messages, links, searches, images va metadata_json.
-Neu nguoi dung hoi co thong tin/du lieu chua, hay noi ro pham vi context, so luong va tom tat nhung gi bot dang biet.
-Khong lap lai token, secret, api key, hay noi dung nhay cam neu thay trong context.
-Neu chua co du lieu, hay huong dan gui link/anh/cau hoi de bot thu thap.
+Bạn là bot quản lý thông tin trong Zalo.
+Trả lời ngắn gọn bằng tiếng Việt có dấu.
+Hãy dựa trên context đã lưu trong D1: messages, links, searches, images và metadata_json.
+Nếu người dùng hỏi có thông tin/dữ liệu chưa, hãy nói rõ phạm vi context, số lượng và tóm tắt những gì bot đang biết.
+Không lặp lại token, secret, api key, hay nội dung nhạy cảm nếu thấy trong context.
+Nếu chưa có dữ liệu, hãy hướng dẫn gửi link/ảnh/câu hỏi để bot thu thập.
 
-Cau hoi: ${question}
+Câu hỏi: ${question}
 
 Context JSON:
 ${JSON.stringify(compactContext).slice(0, 14000)}
@@ -1682,7 +1682,7 @@ function buildConversationContext(context, scopeLabel) {
 async function getVisibleContext(env, message) {
   const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
   const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, message.chat?.id || "");
-  const scopeLabel = canViewGlobal ? "tat ca chat/group" : isPrivateChat(message) ? "chat rieng nay" : "nhom nay";
+  const scopeLabel = canViewGlobal ? "tất cả chat/group" : isPrivateChat(message) ? "chat riêng này" : "nhóm này";
 
   return { context, scopeLabel, canViewGlobal };
 }
@@ -1713,44 +1713,44 @@ async function inferConversationRoute(env, message, question) {
   const compactContext = buildConversationContext(context, scopeLabel);
   const previousState = await getConversationState(env, message.chat?.id || "");
   const prompt = `
-Ban la bo dinh tuyen y dinh cho Zalo bot. Chi tra ve JSON hop le, khong viet giai thich.
-Nhiem vu: doc tin nhan moi, state cu va context gan nhat de hieu nguoi dung dang muon gi nhu mot nguoi dang noi chuyen tu nhien.
+Bạn là bộ định tuyến ý định cho Zalo bot. Chỉ trả về JSON hợp lệ, không viết giải thích.
+Nhiệm vụ: đọc tin nhắn mới, state cũ và context gần nhất để hiểu người dùng đang muốn gì như một người đang nói chuyện tự nhiên.
 
-Intent hop le:
-- weather: hoi thoi tiet/du bao/mua/nong/lanh.
-- live_search: hoi thong tin moi can web, tin tuc, gia vang, ty gia, lich, su kien hien tai.
-- rental_search: tim nha/phong/can ho/thue nha/kiem tra link thue nha.
-- context_summary: hoi bot da luu/thu thap/biet bao nhieu/co du lieu gi trong chat/group.
-- broken_links: hoi link loi/hong/chet.
-- help: hoi cach dung bot.
-- general_chat: cau hoi chung, hoi tiep, giai thich, tu van.
-- small_talk: chao hoi/noi chuyen nhe.
-- ignore: tin vo nghia khong can tra loi dai.
+Intent hợp lệ:
+- weather: hỏi thời tiết/dự báo/mưa/nóng/lạnh.
+- live_search: hỏi thông tin mới cần web, tin tức, giá vàng, tỷ giá, lịch, sự kiện hiện tại.
+- rental_search: tìm nhà/phòng/căn hộ/thuê nhà/kiểm tra link thuê nhà.
+- context_summary: hỏi bot đã lưu/thu thập/biết bao nhiêu/có dữ liệu gì trong chat/group.
+- broken_links: hỏi link lỗi/hỏng/chết.
+- help: hỏi cách dùng bot.
+- general_chat: câu hỏi chung, hỏi tiếp, giải thích, tư vấn.
+- small_talk: chào hỏi/nói chuyện nhẹ.
+- ignore: tin vô nghĩa không cần trả lời dài.
 
 Quy tac:
-- Neu tin moi ngan/cut nhu "cai do sao", "roi sao", "o dau", hay mo rong bang state cu va recent_messages.
-- Neu tin moi chi la dia diem va state cu/recent_messages la weather, chon weather va viet lai cau hoi day du.
-- Neu nhac "KEY_Dashboard" thi khong xu ly o router vi code rieng da xu ly bao mat.
-- Khong bao gio dua token, secret, api key vao rewritten_question.
-- needs_web=true cho weather/live_search va rental_search khi can tim tren internet.
-- confidence tu 0 den 1.
+- Nếu tin mới ngắn/cụt như "cái đó sao", "rồi sao", "ở đâu", hãy mở rộng bằng state cũ và recent_messages.
+- Nếu tin mới chỉ là địa điểm và state cũ/recent_messages là weather, chọn weather và viết lại câu hỏi đầy đủ.
+- Nếu nhắc "KEY_Dashboard" thì không xử lý ở router vì code riêng đã xử lý bảo mật.
+- Không bao giờ đưa token, secret, api key vào rewritten_question.
+- needs_web=true cho weather/live_search và rental_search khi cần tìm trên internet.
+- confidence từ 0 đến 1.
 
-Tra ve dung JSON schema:
+Trả về đúng JSON schema:
 {
   "intent": "general_chat",
   "confidence": 0.8,
-  "topic": "chu de ngan",
-  "rewritten_question": "cau hoi da viet lai day du bang tieng Viet khong dau",
+  "topic": "chủ đề ngắn",
+  "rewritten_question": "câu hỏi đã viết lại đầy đủ bằng tiếng Việt có dấu",
   "target_location": "",
   "needs_web": false,
-  "reason": "ly do rat ngan"
+  "reason": "lý do rất ngắn"
 }
 
-Tin nhan moi: ${redactSensitiveText(question)}
+Tin nhắn mới: ${redactSensitiveText(question)}
 Chat scope: ${scopeLabel}
-State cu JSON:
+State cũ JSON:
 ${JSON.stringify(previousState).slice(0, 3000)}
-Context gan nhat JSON:
+Context gần nhất JSON:
 ${JSON.stringify(compactContext).slice(0, 12000)}
 `;
 
@@ -1788,7 +1788,7 @@ async function answerGeneralQuestion(env, message, question) {
       return await answerWeatherQuestion(env, message, question);
     } catch (error) {
       console.error(error);
-      return "Minh chua lay duoc thoi tiet luc nay. Ban gui lai dia diem cu the hon nhe, vi du: thoi tiet Quan 12 TP HCM.";
+      return "Mình chưa lấy được thời tiết lúc này. Bạn gửi lại địa điểm cụ thể hơn nhé, ví dụ: thời tiết Quận 12 TP HCM.";
     }
   }
 
@@ -1797,26 +1797,26 @@ async function answerGeneralQuestion(env, message, question) {
       const query = enrichLiveQuery(env, question);
       const result = await searchWeb(env, query, message);
       await saveSearch(env, message, query, result.answer, result.sources);
-      return result.answer || "Chua tim duoc thong tin moi phu hop.";
+      return result.answer || "Chưa tìm được thông tin mới phù hợp.";
     } catch (error) {
       console.error(error);
     }
   }
 
   if (!env.GEMINI_API_KEY) {
-    return `${formatChatContextFallback(context, scopeLabel)}\n\nChua co Gemini nen bot chua tra loi hoi dap tu nhien duoc.`;
+    return `${formatChatContextFallback(context, scopeLabel)}\n\nChưa có Gemini nên bot chưa trả lời hỏi đáp tự nhiên được.`;
   }
 
   const compactContext = buildConversationContext(context, scopeLabel);
   const prompt = `
-Ban la tro ly Zalo noi chuyen tu nhien nhu mot nguoi binh thuong, nhung ngan gon va huu ich.
-Tra loi bang tieng Viet khong dau.
-Neu cau hoi lien quan den du lieu nhom/chat, hay dua vao Context JSON.
-Neu cau hoi la kien thuc chung, hay tra loi theo hieu biet cua ban.
-Neu cau hoi can du lieu thoi gian thuc ma web search khong co ket qua trong context, hay noi ro can search lai hoac can dia diem/cu the hon.
-Khong lap lai token, secret, api key, hay noi dung nhay cam.
+Bạn là trợ lý Zalo nói chuyện tự nhiên như một người bình thường, nhưng ngắn gọn và hữu ích.
+Trả lời bằng tiếng Việt có dấu.
+Nếu câu hỏi liên quan đến dữ liệu nhóm/chat, hãy dựa vào Context JSON.
+Nếu câu hỏi là kiến thức chung, hãy trả lời theo hiểu biết của bạn.
+Nếu câu hỏi cần dữ liệu thời gian thực mà web search không có kết quả trong context, hãy nói rõ cần search lại hoặc cần địa điểm/cụ thể hơn.
+Không lặp lại token, secret, api key, hay nội dung nhạy cảm.
 
-Cau hoi: ${question}
+Câu hỏi: ${question}
 
 Context JSON:
 ${JSON.stringify(compactContext).slice(0, 14000)}
@@ -1835,21 +1835,21 @@ ${JSON.stringify(compactContext).slice(0, 14000)}
       return formatChatContextFallback(context, scopeLabel);
     }
 
-    return "Gemini dang loi hoac het quota nen minh chua tra loi thong minh duoc luc nay. Cac lenh luu link, dashboard va thoi tiet van chay rieng.";
+    return "Gemini đang lỗi hoặc hết quota nên mình chưa trả lời thông minh được lúc này. Các lệnh lưu link, dashboard và thời tiết vẫn chạy riêng.";
   }
 }
 
 function getHelpText() {
   return [
-    "Lenh bot:",
-    "- Gui link thue nha: bot tu luu va tom tat.",
-    "- Hoi: hom nay co link nao?",
-    "- Hoi: link nao loi?",
-    "- Hoi: co thong tin trong nhom chua?",
-    "- Hoi: thoi tiet hom nay sao?",
-    "- Hoi tu nhien nhu: cai nay la gi / nen lam sao / tom tat giup",
-    "- Gui anh ban do kem caption: Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr",
-    "- Hoi: tim phong duoi 5 trieu / quan 7 / gan truong..."
+    "Lệnh bot:",
+    "- Gửi link thuê nhà: bot tự lưu và tóm tắt.",
+    "- Hỏi: hôm nay có link nào?",
+    "- Hỏi: link nào lỗi?",
+    "- Hỏi: có thông tin trong nhóm chưa?",
+    "- Hỏi: thời tiết hôm nay sao?",
+    "- Hỏi tự nhiên như: cái này là gì / nên làm sao / tóm tắt giúp",
+    "- Gửi ảnh bản đồ kèm caption: Tâm Ga Bình Triệu, bán kính 2km, tìm nhà dưới 10tr",
+    "- Hỏi: tìm phòng dưới 5 triệu / quận 7 / gần trường..."
   ].join("\n");
 }
 
@@ -1858,7 +1858,7 @@ async function answerQuestion(env, message, question) {
   const normalized = normalizeText(question);
 
   if (!env.DB) {
-    return "Chua cau hinh database Cloudflare D1.";
+    return "Chưa cấu hình database Cloudflare D1.";
   }
 
   if (normalized.includes("help") || normalized.includes("huong dan")) {
@@ -1874,23 +1874,23 @@ async function answerQuestion(env, message, question) {
   }
 
   if (normalized.includes("loi") || normalized.includes("hong") || normalized.includes("die")) {
-    return `Cac link dang loi:\n${formatLinkList(await getBrokenLinks(env, chatId))}`;
+    return `Các link đang lỗi:\n${formatLinkList(await getBrokenLinks(env, chatId))}`;
   }
 
   const links = await getRecentLinks(env, chatId, 20);
 
   if (!env.GEMINI_API_KEY) {
-    return `Da co ${links.length} link gan nhat.\n${formatLinkList(links.slice(0, 8))}\n\nChua co GEMINI_API_KEY nen bot chua tra loi thong minh duoc.`;
+    return `Đã có ${links.length} link gần nhất.\n${formatLinkList(links.slice(0, 8))}\n\nChưa có GEMINI_API_KEY nên bot chưa trả lời thông minh được.`;
   }
 
   if (links.length === 0) {
     try {
       const result = await searchWeb(env, question, message);
       await saveSearch(env, message, question, result.answer, result.sources);
-      return result.answer || "Chua tim duoc ket qua phu hop.";
+      return result.answer || "Chưa tìm được kết quả phù hợp.";
     } catch (error) {
       console.error(error);
-      return "Chua co link nao de tra loi. Gemini Google Search dang loi/het quota, hay gui link thue nha vao nhom truoc.";
+      return "Chưa có link nào để trả lời. Gemini Google Search đang lỗi/hết quota, hãy gửi link thuê nhà vào nhóm trước.";
     }
   }
 
@@ -1898,7 +1898,7 @@ async function answerQuestion(env, message, question) {
     try {
       const result = await searchWeb(env, question, message);
       await saveSearch(env, message, question, result.answer, result.sources);
-      return result.answer || "Chua tim duoc ket qua phu hop.";
+      return result.answer || "Chưa tìm được kết quả phù hợp.";
     } catch (error) {
       console.error(error);
     }
@@ -1919,13 +1919,13 @@ async function answerQuestion(env, message, question) {
     })
     .join("\n\n");
   const prompt = `
-Ban la tro ly quan ly link thue nha trong nhom Zalo.
-Tra loi ngan gon, thuc dung, bang tieng Viet khong dau.
-Chi dua vao danh sach link da luu ben duoi. Neu khong du thong tin thi noi chua ro.
+Bạn là trợ lý quản lý link thuê nhà trong nhóm Zalo.
+Trả lời ngắn gọn, thực dụng, bằng tiếng Việt có dấu.
+Chỉ dựa vào danh sách link đã lưu bên dưới. Nếu không đủ thông tin thì nói chưa rõ.
 
-Cau hoi: ${question}
+Câu hỏi: ${question}
 
-Danh sach link:
+Danh sách link:
 ${context}
 `;
 
@@ -1961,7 +1961,7 @@ async function answerWithConversationRoute(env, message, question) {
   }
 
   if (route.intent === "broken_links") {
-    return `Cac link dang loi:\n${formatLinkList(await getBrokenLinks(env, message.chat?.id || ""))}`;
+    return `Các link đang lỗi:\n${formatLinkList(await getBrokenLinks(env, message.chat?.id || ""))}`;
   }
 
   if (route.intent === "rental_search") {
@@ -2003,7 +2003,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
       const summaryInfo = await summarizeRentalLink(env, message, url, sourceText, urlInfo).catch((error) => {
         console.error(error);
         return {
-          summary: urlInfo.title || urlInfo.description || "Da luu link, nhung chua tom tat duoc.",
+          summary: urlInfo.title || urlInfo.description || "Đã lưu link, nhưng chưa tóm tắt được.",
           priceText: "",
           areaText: ""
         };
@@ -2013,11 +2013,11 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
     }
 
     const lines = savedLinks.map((link, index) => {
-      const status = link.status === "ok" ? "OK" : `LOI${link.httpStatus ? ` ${link.httpStatus}` : ""}`;
+      const status = link.status === "ok" ? "OK" : `LỖI${link.httpStatus ? ` ${link.httpStatus}` : ""}`;
       return `${index + 1}. ${status}: ${link.summary || link.title || link.url}`;
     });
 
-    return limitText(`Da luu ${savedLinks.length} link.\n${lines.join("\n")}`);
+    return limitText(`Đã lưu ${savedLinks.length} link.\n${lines.join("\n")}`);
   }
 
   const cleanQuestion = getCleanQuestion(text, message.chat?.title || "");
@@ -2026,7 +2026,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
   }
 
   if (await isWeatherLocationFollowUp(env, message, cleanQuestion || text)) {
-    return answerGeneralQuestion(env, message, `thoi tiet tai ${cleanQuestion || text}`);
+    return answerGeneralQuestion(env, message, `thời tiết tại ${cleanQuestion || text}`);
   }
 
   const routedAnswer = await answerWithConversationRoute(env, message, cleanQuestion || text);
@@ -2199,11 +2199,11 @@ async function analyzeImage(env, message, eventName = "message.image.received") 
   await saveMessage(env, message, eventName);
 
   if (!photoUrl) {
-    return "Da nhan event anh, nhung webhook khong co photo_url/url de tai anh. Hay thu gui lai anh hoac xem dashboard metadata.";
+    return "Đã nhận event ảnh, nhưng webhook không có photo_url/url để tải ảnh. Hãy thử gửi lại ảnh hoặc xem dashboard metadata.";
   }
 
   if (!env.GEMINI_API_KEY) {
-    return "Da nhan anh, nhung chua co GEMINI_API_KEY de nhan dien.";
+    return "Đã nhận ảnh, nhưng chưa có GEMINI_API_KEY để nhận diện.";
   }
 
   let imagePayload;
@@ -2212,14 +2212,14 @@ async function analyzeImage(env, message, eventName = "message.image.received") 
     imagePayload = await downloadImageAsBase64(photoUrl);
   } catch (error) {
     console.error(error);
-    return `Da thay URL anh (${imageInfo?.source || "unknown"}), nhung chua tai duoc anh de phan tich: ${limitText(error?.message || error, 180)}`;
+    return `Đã thấy URL ảnh (${imageInfo?.source || "unknown"}), nhưng chưa tải được ảnh để phân tích: ${limitText(error?.message || error, 180)}`;
   }
 
   const prompt = `
-Ban la tro ly thu thap thong tin thue nha tu anh nguoi dung gui trong nhom Zalo.
-Hay doc anh va caption. Neu la anh ban do, nhan dien cac dia danh thay duoc, vung duoc khoanh, diem trung tam neu co, va uoc luong khu vuc. Khong khang dinh ban kinh km chinh xac neu anh khong co ty le/du lieu toa do.
-Neu caption co yeu cau tim nha/phong/gia/ban kinh, hay tao them goi y truy van web ngan gon.
-Tra loi bang tieng Viet khong dau, ngan gon.
+Bạn là trợ lý thu thập thông tin thuê nhà từ ảnh người dùng gửi trong nhóm Zalo.
+Hãy đọc ảnh và caption. Nếu là ảnh bản đồ, nhận diện các địa danh thấy được, vùng được khoanh, điểm trung tâm nếu có, và ước lượng khu vực. Không khẳng định bán kính km chính xác nếu ảnh không có tỷ lệ/dữ liệu tọa độ.
+Nếu caption có yêu cầu tìm nhà/phòng/giá/bán kính, hãy tạo thêm gợi ý truy vấn web ngắn gọn.
+Trả lời bằng tiếng Việt có dấu, ngắn gọn.
 
 Caption: ${caption}
 `;
@@ -2228,17 +2228,17 @@ Caption: ${caption}
     message
   });
 
-  answer = answer || "Da nhan anh nhung chua phan tich duoc.";
+  answer = answer || "Đã nhận ảnh nhưng chưa phân tích được.";
 
   if (wantsWebSearch(caption)) {
     try {
-      const searchQuery = `${caption}\nKhu vuc/anh: ${answer}`;
+      const searchQuery = `${caption}\nKhu vực/ảnh: ${answer}`;
       const searchResult = await searchWeb(env, searchQuery, message);
-      answer = `${answer}\n\nKet qua web:\n${searchResult.answer}`;
+      answer = `${answer}\n\nKết quả web:\n${searchResult.answer}`;
       await saveSearch(env, message, searchQuery, searchResult.answer, searchResult.sources);
     } catch (error) {
       console.error(error);
-      answer = `${answer}\n\nChua search web duoc, co the Gemini Google Search dang het quota.`;
+      answer = `${answer}\n\nChưa search web được, có thể Gemini Google Search đang hết quota.`;
     }
   }
 
@@ -2376,7 +2376,7 @@ async function sendDailyWeather(env, options = {}) {
 
     try {
       const weatherText = await answerWeatherQuestion(env, syntheticMessage, `thoi tiet ${location}`);
-      const prefix = options.manual ? "Test lich thoi tiet 6h:\n" : "Ban tin thoi tiet 6h sang:\n";
+      const prefix = options.manual ? "Test lịch thời tiết 6h:\n" : "Bản tin thời tiết 6h sáng:\n";
       await sendChatAction(env, chatId, "typing");
       await sendMessage(env, chatId, `${prefix}${weatherText}`);
       results.push({ chat_id: chatId, ok: true });

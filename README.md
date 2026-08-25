@@ -134,6 +134,7 @@ Vi du:
 Bot luu them `metadata_json` cho tin nhan, link, search va anh. Metadata gom event Zalo,
 chat id/type/title, nguoi gui, message id/date, so URL trich xuat va thoi diem bot ghi nhan.
 Khi hoi thong tin tong quat, bot dung metadata va du lieu gan nhat trong group hien tai de tra loi.
+Bot trả lời người dùng bằng tiếng Việt có dấu.
 Ngoai cac lenh co san, bot se xu ly cau hoi tu nhien bang Gemini. Cau hoi can du lieu moi
 nhu tin moi, ty gia, gia vang se thu dung web search. Rieng thoi tiet dung Open-Meteo free API
 khong can Gemini; neu khong ghi dia diem, thoi tiet mac dinh la TP Ho Chi Minh.
