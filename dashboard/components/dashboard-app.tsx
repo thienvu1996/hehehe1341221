@@ -266,15 +266,15 @@ function PaginationFooter({
 }
 
 function TokenGate({
-  token,
-  setToken,
-  error
+  error,
+  isLoading,
+  onLogin
 }: {
-  token: string;
-  setToken: (token: string) => void;
   error: string;
+  isLoading: boolean;
+  onLogin: (key: string) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState(token);
+  const [draft, setDraft] = useState("");
 
   return (
     <main className="gate-shell">
@@ -292,8 +292,7 @@ function TokenGate({
             const clean = draft.trim();
 
             if (clean) {
-              localStorage.setItem("dashboardToken", clean);
-              setToken(clean);
+              void onLogin(clean);
             }
           }}
         >
@@ -310,10 +309,11 @@ function TokenGate({
             />
           </div>
           {error ? <p className="form-error">{error}</p> : null}
-          <button type="submit" className="primary-button">
-            <ShieldCheck size={18} />
-            Mo dashboard
+          <button type="submit" className="primary-button" disabled={isLoading}>
+            {isLoading ? <Loader2 className="spin" size={18} /> : <ShieldCheck size={18} />}
+            {isLoading ? "Dang mo..." : "Mo dashboard"}
           </button>
+          <p className="form-hint">Key chinh chi dung de tao session 30 phut, khong luu dai trong browser.</p>
         </form>
       </section>
     </main>
@@ -608,14 +608,47 @@ function EmptyState({ icon: Icon, title }: { icon: typeof Link2; title: string }
 }
 
 export function DashboardApp() {
-  const [token, setToken] = useState("");
+  const [sessionToken, setSessionToken] = useState("");
   const [data, setData] = useState<DashboardData | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("links");
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const loadData = async (currentToken = token) => {
+  const login = async (dashboardKey: string) => {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_URL}/admin/dashboard-session`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ token: dashboardKey }),
+        cache: "no-store"
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || !payload.ok || !payload.session_token) {
+        throw new Error(payload.message || `HTTP ${response.status}`);
+      }
+
+      sessionStorage.setItem("dashboardSession", payload.session_token);
+      localStorage.removeItem("dashboardToken");
+      setSessionToken(payload.session_token);
+      await loadData(payload.session_token);
+    } catch (loginError) {
+      sessionStorage.removeItem("dashboardSession");
+      setSessionToken("");
+      setData(null);
+      setError(loginError instanceof Error ? loginError.message : "Khong mo duoc dashboard");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadData = async (currentToken = sessionToken) => {
     if (!currentToken) {
       return;
     }
@@ -638,6 +671,11 @@ export function DashboardApp() {
 
       setData(payload);
     } catch (loadError) {
+      if (loadError instanceof Error && /session|unauthorized/i.test(loadError.message)) {
+        sessionStorage.removeItem("dashboardSession");
+        setSessionToken("");
+      }
+
       setData(null);
       setError(loadError instanceof Error ? loadError.message : "Khong tai duoc du lieu");
     } finally {
@@ -646,21 +684,24 @@ export function DashboardApp() {
   };
 
   useEffect(() => {
-    const savedToken = localStorage.getItem("dashboardToken") || "";
+    localStorage.removeItem("dashboardToken");
+    const savedToken = sessionStorage.getItem("dashboardSession") || "";
 
     if (savedToken) {
-      setToken(savedToken);
+      setSessionToken(savedToken);
     }
   }, []);
 
   useEffect(() => {
-    if (token && !data && !isLoading && !error) {
-      void loadData(token);
+    if (sessionToken && !data && !isLoading && !error) {
+      void loadData(sessionToken);
     }
-  }, [token]);
+  }, [sessionToken]);
 
-  if (!token || (!data && error)) {
-    return <TokenGate token={token} setToken={setToken} error={error === "Unauthorized" ? "Key khong dung." : error} />;
+  if (!sessionToken || (!data && error)) {
+    const displayError = error === "Unauthorized" || error === "Session expired" ? "Key het han hoac khong dung." : error;
+
+    return <TokenGate onLogin={login} isLoading={isLoading} error={displayError} />;
   }
 
   return (
@@ -685,8 +726,9 @@ export function DashboardApp() {
           <button
             className="ghost-button"
             onClick={() => {
+              sessionStorage.removeItem("dashboardSession");
               localStorage.removeItem("dashboardToken");
-              setToken("");
+              setSessionToken("");
               setData(null);
             }}
           >

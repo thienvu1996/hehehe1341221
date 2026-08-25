@@ -4,6 +4,7 @@ const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
+const DASHBOARD_SESSION_TTL_SECONDS = 30 * 60;
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -20,7 +21,7 @@ function getDashboardCorsHeaders(request) {
 
   return {
     "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Dashboard-Token, X-Bot-Api-Secret-Token",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
@@ -42,6 +43,67 @@ function constantTimeEqual(a = "", b = "") {
   }
 
   return diff === 0;
+}
+
+function base64UrlEncode(value) {
+  const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+  let binary = "";
+
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function createDashboardSignature(secret, payload) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+
+  return base64UrlEncode(signature);
+}
+
+function getDashboardMasterSecret(env) {
+  return env.DASHBOARD_TOKEN || env.WEBHOOK_SECRET_TOKEN || "";
+}
+
+async function createDashboardSessionToken(env) {
+  const secret = getDashboardMasterSecret(env);
+  const expiresAt = Math.floor(Date.now() / 1000) + DASHBOARD_SESSION_TTL_SECONDS;
+  const nonce = crypto.randomUUID();
+  const payload = `v1.${expiresAt}.${nonce}`;
+  const signature = await createDashboardSignature(secret, payload);
+
+  return {
+    token: `${payload}.${signature}`,
+    expiresAt
+  };
+}
+
+async function verifyDashboardSessionToken(env, token) {
+  const secret = getDashboardMasterSecret(env);
+  const parts = String(token || "").split(".");
+
+  if (!secret || parts.length !== 4 || parts[0] !== "v1") {
+    return false;
+  }
+
+  const expiresAt = Number(parts[1]);
+
+  if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+    return false;
+  }
+
+  const payload = parts.slice(0, 3).join(".");
+  const expectedSignature = await createDashboardSignature(secret, payload);
+
+  return constantTimeEqual(parts[3], expectedSignature);
 }
 
 function getReplyText(message) {
@@ -1576,15 +1638,12 @@ function authorizeAdminRequest(request, env) {
   return null;
 }
 
-function authorizeDashboardRequest(request, env) {
-  const expectedToken = env.DASHBOARD_TOKEN || env.WEBHOOK_SECRET_TOKEN;
+function authorizeDashboardMasterKey(request, env, token) {
+  const expectedToken = getDashboardMasterSecret(env);
 
   if (!expectedToken) {
     return json({ message: "Server is missing DASHBOARD_TOKEN" }, 500);
   }
-
-  const token =
-    request.headers.get("x-dashboard-token") || request.headers.get("x-bot-api-secret-token") || "";
 
   if (!constantTimeEqual(token, expectedToken)) {
     return json({ message: "Unauthorized" }, 403);
@@ -1593,8 +1652,48 @@ function authorizeDashboardRequest(request, env) {
   return null;
 }
 
+async function authorizeDashboardRequest(request, env) {
+  const masterSecret = getDashboardMasterSecret(env);
+
+  if (!masterSecret) {
+    return json({ message: "Server is missing DASHBOARD_TOKEN" }, 500);
+  }
+
+  const sessionToken = request.headers.get("x-dashboard-token") || "";
+  const adminToken = request.headers.get("x-bot-api-secret-token") || "";
+
+  if (sessionToken && (await verifyDashboardSessionToken(env, sessionToken))) {
+    return null;
+  }
+
+  if (adminToken && constantTimeEqual(adminToken, masterSecret)) {
+    return null;
+  }
+
+  return json({ message: "Session expired" }, 403);
+}
+
+async function handleDashboardSession(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const token = String(body.token || request.headers.get("x-dashboard-token") || "").trim();
+  const unauthorizedResponse = authorizeDashboardMasterKey(request, env, token);
+
+  if (unauthorizedResponse) {
+    return dashboardJson(request, await unauthorizedResponse.json(), unauthorizedResponse.status);
+  }
+
+  const session = await createDashboardSessionToken(env);
+
+  return dashboardJson(request, {
+    ok: true,
+    session_token: session.token,
+    expires_at: session.expiresAt,
+    ttl_seconds: DASHBOARD_SESSION_TTL_SECONDS
+  });
+}
+
 async function handleDashboardData(request, env) {
-  const unauthorizedResponse = authorizeDashboardRequest(request, env);
+  const unauthorizedResponse = await authorizeDashboardRequest(request, env);
 
   if (unauthorizedResponse) {
     return dashboardJson(request, await unauthorizedResponse.json(), unauthorizedResponse.status);
@@ -1770,11 +1869,15 @@ export default {
       return handleTestWebhook(request, env);
     }
 
-    if (request.method === "OPTIONS" && url.pathname === "/admin/dashboard-data") {
+    if (request.method === "OPTIONS" && ["/admin/dashboard-data", "/admin/dashboard-session"].includes(url.pathname)) {
       return new Response(null, {
         status: 204,
         headers: getDashboardCorsHeaders(request)
       });
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/dashboard-session") {
+      return handleDashboardSession(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/admin/dashboard-data") {

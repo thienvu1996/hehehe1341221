@@ -23,7 +23,8 @@ npx wrangler secret put DASHBOARD_TOKEN
 ```
 
 `GEMINI_API_KEY` la tuy chon. Neu chua set, bot van luu link vao D1 nhung chua tom tat/tra loi thong minh bang Gemini.
-`DASHBOARD_TOKEN` dung de bao ve API dashboard doc du lieu tu D1.
+`DASHBOARD_TOKEN` la key chinh de dang nhap dashboard. Web khong luu key nay dai han; sau khi dang nhap,
+Worker cap session token tam thoi het han sau 30 phut.
 
 Deploy:
 
@@ -167,7 +168,8 @@ Neu Google Search het quota, bot van luu/phan tich anh nhung se bao chua search 
 
 ## Web dashboard Next.js
 
-Dashboard doc du lieu tu endpoint Worker `GET /admin/dashboard-data` va yeu cau `DASHBOARD_TOKEN`.
+Dashboard dang nhap qua endpoint Worker `POST /admin/dashboard-session`, roi doc du lieu tu
+`GET /admin/dashboard-data` bang session token 30 phut.
 Dashboard co tab `AI quota` de xem usage bot da ghi nhan. Gemini API khong tra ve so quota con lai
 truc tiep, nen dashboard hien so call/token da dung va cac loi quota/rate limit neu co.
 Moi tab du lieu tu dong phan trang 10 dong/trang khi ket qua dai.
