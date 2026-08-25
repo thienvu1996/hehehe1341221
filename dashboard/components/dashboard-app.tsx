@@ -163,6 +163,26 @@ type ReminderRow = {
   metadata?: Record<string, unknown>;
 };
 
+type MemoryRow = {
+  id: string;
+  scope: string;
+  chat_id: string;
+  chat_type: string;
+  chat_title: string;
+  user_id: string;
+  user_name: string;
+  memory_type: string;
+  topic: string;
+  memory_key: string;
+  summary: string;
+  value?: Record<string, unknown>;
+  confidence: number;
+  importance: number;
+  expires_at?: string | null;
+  updated_at: string;
+  last_seen_at: string;
+};
+
 type BotProfile = {
   display_name: string;
   gender: string;
@@ -185,6 +205,7 @@ type DashboardData = {
     ai_usage: number;
     chat_settings: number;
     reminders: number;
+    chat_memories: number;
   };
   ai_usage?: {
     stats: {
@@ -208,16 +229,18 @@ type DashboardData = {
     images: ImageRow[];
     chat_settings: ChatSettingRow[];
     reminders: ReminderRow[];
+    memories: MemoryRow[];
   };
 };
 
-type TabKey = "links" | "searches" | "images" | "messages" | "schedules" | "profile" | "ai";
+type TabKey = "links" | "searches" | "images" | "messages" | "memory" | "schedules" | "profile" | "ai";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Link2 }> = [
   { key: "links", label: "Link nha", icon: Link2 },
   { key: "searches", label: "Cau hoi", icon: Search },
   { key: "images", label: "Anh", icon: ImageIcon },
   { key: "messages", label: "Tin nhan", icon: MessageSquareText },
+  { key: "memory", label: "Memory", icon: Database },
   { key: "schedules", label: "Lich", icon: CalendarClock },
   { key: "profile", label: "Bot", icon: Bot },
   { key: "ai", label: "AI quota", icon: Gauge }
@@ -591,6 +614,73 @@ function MessageList({ messages, query }: { messages: MessageRow[]; query: strin
             </div>
           </article>
         ))}
+      </div>
+      <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
+    </>
+  );
+}
+
+function MemoryList({ memories, query }: { memories: MemoryRow[]; query: string }) {
+  const filtered = useMemo(() => {
+    const needle = normalize(query);
+
+    if (!needle) {
+      return memories;
+    }
+
+    return memories.filter((row) =>
+      normalize(
+        `${row.scope} ${row.topic} ${row.memory_type} ${row.memory_key} ${row.summary} ${row.user_name} ${row.chat_title}`
+      ).includes(needle)
+    );
+  }, [memories, query]);
+  const { page, pageRows, totalPages, setPage } = usePagedRows(filtered, query);
+
+  if (filtered.length === 0) {
+    return <EmptyState icon={Database} title="Chua co memory hop dieu kien" />;
+  }
+
+  return (
+    <>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Memory</th>
+              <th>Scope</th>
+              <th>Topic</th>
+              <th>Do tin cay</th>
+              <th>Cap nhat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.map((row) => (
+              <tr key={row.id}>
+                <td>
+                  <div className="table-title">{row.summary || row.memory_key}</div>
+                  <div className="meta-line">
+                    {row.memory_type || "fact"} | {row.user_name || getChatLabel(row.chat_title, row.chat_id)}
+                  </div>
+                </td>
+                <td>
+                  <span className="status-pill status-ok">{row.scope || "chat"}</span>
+                </td>
+                <td>
+                  <div>{row.topic || "general"}</div>
+                  <span className="muted">{row.memory_key || "memory"}</span>
+                </td>
+                <td>
+                  <div>{Math.round(Number(row.confidence || 0) * 100)}%</div>
+                  <span className="muted">muc {row.importance || 1}/5</span>
+                </td>
+                <td>
+                  <div>{formatDate(row.updated_at)}</div>
+                  {row.expires_at ? <span className="muted">het han {formatDate(row.expires_at)}</span> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
       <PaginationFooter page={page} totalItems={filtered.length} totalPages={totalPages} onPageChange={setPage} />
     </>
@@ -1175,6 +1265,7 @@ export function DashboardApp() {
         <StatTile label="Link da luu" value={data?.counts.links ?? 0} icon={Link2} accent="#22C55E" />
         <StatTile label="Cau search" value={data?.counts.searches ?? 0} icon={Sparkles} accent="#F59E0B" />
         <StatTile label="Anh da doc" value={data?.counts.images ?? 0} icon={ImageIcon} accent="#F472B6" />
+        <StatTile label="Memory" value={data?.counts.chat_memories ?? 0} icon={Database} accent="#14B8A6" />
         <StatTile label="Lich" value={data?.counts.reminders ?? 0} icon={CalendarClock} accent="#FB7185" />
         <StatTile label="AI calls" value={data?.counts.ai_usage ?? 0} icon={Gauge} accent="#A78BFA" />
       </section>
@@ -1224,6 +1315,7 @@ export function DashboardApp() {
           {data && activeTab === "searches" ? <SearchList searches={data.recent.searches} query={query} /> : null}
           {data && activeTab === "images" ? <ImageList images={data.recent.images} query={query} /> : null}
           {data && activeTab === "messages" ? <MessageList messages={data.recent.messages} query={query} /> : null}
+          {data && activeTab === "memory" ? <MemoryList memories={data.recent.memories ?? []} query={query} /> : null}
           {data && activeTab === "schedules" ? (
             <SchedulePanel
               settings={data.recent.chat_settings ?? []}

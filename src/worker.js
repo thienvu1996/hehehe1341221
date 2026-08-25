@@ -2,7 +2,7 @@ const API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
-const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
@@ -2197,10 +2197,10 @@ async function answerWeatherQuestion(env, message, question) {
 
   return limitText(
     `Thời tiết ${place.name} lúc ${current.time || "hiện tại"}: ${getWeatherCodeLabel(Number(current.weather_code))}.\n` +
-      `Nhiệt độ ${Math.round(Number(current.temperature_2m))}C, cảm giác ${Math.round(Number(current.apparent_temperature))}C.\n` +
-      `Độ ẩm ${Math.round(Number(current.relative_humidity_2m))}%, gió ${Math.round(Number(current.wind_speed_10m))} km/h, mưa hiện tại ${Number(current.precipitation || 0)} mm.` +
-      rainLine +
-      sourceLine
+    `Nhiệt độ ${Math.round(Number(current.temperature_2m))}C, cảm giác ${Math.round(Number(current.apparent_temperature))}C.\n` +
+    `Độ ẩm ${Math.round(Number(current.relative_humidity_2m))}%, gió ${Math.round(Number(current.wind_speed_10m))} km/h, mưa hiện tại ${Number(current.precipitation || 0)} mm.` +
+    rainLine +
+    sourceLine
   );
 }
 
@@ -2647,6 +2647,388 @@ async function saveConversationState(env, message, route, question) {
   }
 }
 
+function extractMemoryKeywords(text) {
+  return normalizeText(text)
+    .replace(/https?:\/\/\S+/g, " ")
+    .split(/[^a-z0-9]+/g)
+    .filter((word) => word.length >= 3)
+    .slice(0, 20);
+}
+
+function parseRentalMemoryFromText(text) {
+  const normalized = normalizeText(text);
+
+  if (!isRentalQuestion(text)) {
+    return null;
+  }
+
+  const districtPatterns = [
+    ["quan 1", "Quận 1"],
+    ["q1", "Quận 1"],
+    ["quan 2", "Quận 2"],
+    ["q2", "Quận 2"],
+    ["quan 3", "Quận 3"],
+    ["q3", "Quận 3"],
+    ["quan 4", "Quận 4"],
+    ["q4", "Quận 4"],
+    ["quan 5", "Quận 5"],
+    ["q5", "Quận 5"],
+    ["quan 6", "Quận 6"],
+    ["q6", "Quận 6"],
+    ["quan 7", "Quận 7"],
+    ["q7", "Quận 7"],
+    ["quan 8", "Quận 8"],
+    ["q8", "Quận 8"],
+    ["quan 9", "Quận 9"],
+    ["q9", "Quận 9"],
+    ["quan 10", "Quận 10"],
+    ["q10", "Quận 10"],
+    ["quan 11", "Quận 11"],
+    ["q11", "Quận 11"],
+    ["quan 12", "Quận 12"],
+    ["q12", "Quận 12"],
+    ["go vap", "Gò Vấp"],
+    ["binh thanh", "Bình Thạnh"],
+    ["thu duc", "Thủ Đức"],
+    ["tan binh", "Tân Bình"],
+    ["tan phu", "Tân Phú"],
+    ["phu nhuan", "Phú Nhuận"],
+    ["binh chanh", "Bình Chánh"],
+    ["nha be", "Nhà Bè"]
+  ];
+  const district = districtPatterns.find(([key]) => normalized.includes(key))?.[1] || "";
+  const budgetMatch = normalized.match(/\b(?:duoi|tam|khoang|toi da|max)?\s*(\d+(?:[.,]\d+)?)\s*(tr|trieu|m)\b/);
+  const bedroomsMatch = normalized.match(/\b(\d+)\s*(?:pn|phong ngu|phong)\b/);
+  const radiusMatch = normalized.match(/\bban kinh\s*(\d+(?:[.,]\d+)?)\s*km\b/);
+  const value = {
+    district,
+    budget_max: budgetMatch ? Math.round(Number(budgetMatch[1].replace(",", ".")) * 1000000) : null,
+    budget_text: budgetMatch ? `${budgetMatch[1]} triệu` : "",
+    bedrooms: bedroomsMatch ? Number(bedroomsMatch[1]) : null,
+    radius_km: radiusMatch ? Number(radiusMatch[1].replace(",", ".")) : null
+  };
+
+  if (!value.district && !value.budget_max && !value.bedrooms && !value.radius_km) {
+    return null;
+  }
+
+  const details = [
+    value.district,
+    value.budget_text ? `tầm ${value.budget_text}` : "",
+    value.bedrooms ? `${value.bedrooms} phòng ngủ` : "",
+    value.radius_km ? `bán kính ${value.radius_km}km` : ""
+  ].filter(Boolean);
+
+  return {
+    scope: "user",
+    memory_type: "temporary_preference",
+    topic: "rental",
+    memory_key: "rental_preference",
+    summary: `Đang tìm nhà ${details.join(", ")}.`,
+    value,
+    confidence: 0.85,
+    importance: 4,
+    ttl_days: 14
+  };
+}
+
+function normalizeMemoryEntry(entry = {}, message = {}) {
+  const scope = ["user", "group", "chat", "global"].includes(entry.scope) ? entry.scope : "chat";
+  const topic = truncateForDb(normalizeText(entry.topic || "general").replace(/[^a-z0-9_]+/g, "_") || "general", 80);
+  const memoryKey = truncateForDb(
+    normalizeText(entry.memory_key || entry.key || topic).replace(/[^a-z0-9_]+/g, "_") || topic,
+    100
+  );
+  const value = entry.value && typeof entry.value === "object" ? entry.value : {};
+  const summary = truncateForDb(redactSensitiveText(entry.summary || JSON.stringify(value)), 500);
+
+  if (!summary || /REDACTED/.test(summary)) {
+    return null;
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    scope,
+    chat_id: scope === "user" ? "" : message.chat?.id || "",
+    chat_type: message.chat?.chat_type || "",
+    chat_title: message.chat?.title || "",
+    user_id: scope === "group" || scope === "chat" ? "" : message.from?.id || "",
+    user_name: message.from?.display_name || "",
+    memory_type: truncateForDb(entry.memory_type || entry.type || "fact", 80),
+    topic,
+    memory_key: memoryKey,
+    summary,
+    value_json: JSON.stringify(value),
+    confidence: Math.max(0, Math.min(1, Number(entry.confidence || 0.7))),
+    importance: Math.max(1, Math.min(5, Number(entry.importance || 2))),
+    source_message_id: message.message_id || "",
+    expires_at:
+      Number(entry.ttl_days || 0) > 0
+        ? new Date(Date.now() + Number(entry.ttl_days) * 86400000).toISOString()
+        : null
+  };
+}
+
+async function saveMemoryEntries(env, message, entries = []) {
+  if (!env.DB || entries.length === 0) {
+    return 0;
+  }
+
+  let saved = 0;
+
+  for (const rawEntry of entries.slice(0, 5)) {
+    const entry = normalizeMemoryEntry(rawEntry, message);
+
+    if (!entry) {
+      continue;
+    }
+
+    try {
+      await env.DB.prepare(
+        `INSERT INTO chat_memories
+          (id, scope, chat_id, chat_type, chat_title, user_id, user_name, memory_type, topic, memory_key,
+           summary, value_json, confidence, importance, source_message_id, expires_at, updated_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(scope, chat_id, user_id, topic, memory_key) DO UPDATE SET
+           chat_type = excluded.chat_type,
+           chat_title = excluded.chat_title,
+           user_name = excluded.user_name,
+           memory_type = excluded.memory_type,
+           summary = excluded.summary,
+           value_json = excluded.value_json,
+           confidence = excluded.confidence,
+           importance = excluded.importance,
+           source_message_id = excluded.source_message_id,
+           expires_at = excluded.expires_at,
+           updated_at = CURRENT_TIMESTAMP,
+           last_seen_at = CURRENT_TIMESTAMP`
+      )
+        .bind(
+          entry.id,
+          entry.scope,
+          entry.chat_id,
+          entry.chat_type,
+          entry.chat_title,
+          entry.user_id,
+          entry.user_name,
+          entry.memory_type,
+          entry.topic,
+          entry.memory_key,
+          entry.summary,
+          entry.value_json,
+          entry.confidence,
+          entry.importance,
+          entry.source_message_id,
+          entry.expires_at
+        )
+        .run();
+      saved += 1;
+    } catch (error) {
+      console.error("Failed to save memory:", error);
+    }
+  }
+
+  return saved;
+}
+
+function shouldExtractMemory(text) {
+  const normalized = normalizeText(text);
+
+  if (!normalized || normalized.length < 8 || wantsDashboardKey(text)) {
+    return false;
+  }
+
+  return (
+    isRentalQuestion(text) ||
+    normalized.includes("toi thich") ||
+    normalized.includes("minh thich") ||
+    normalized.includes("toi dang") ||
+    normalized.includes("minh dang") ||
+    normalized.includes("can ") ||
+    normalized.includes("muon ") ||
+    normalized.includes("ngan sach") ||
+    normalized.includes("ten toi") ||
+    normalized.includes("goi toi") ||
+    normalized.includes("nhom nay")
+  );
+}
+
+async function extractAndSaveMemories(env, message, text) {
+  if (!env.DB || !shouldExtractMemory(text)) {
+    return 0;
+  }
+
+  const fallbackMemory = parseRentalMemoryFromText(text);
+  const entries = fallbackMemory ? [fallbackMemory] : [];
+
+  if (env.GEMINI_API_KEY) {
+    const prompt = `
+Bạn là bộ trích xuất trí nhớ cho Zalo bot. Chỉ trả về JSON hợp lệ.
+Nhiệm vụ: đọc tin nhắn mới và chọn thông tin đáng nhớ cho lần sau.
+
+Chỉ lưu thông tin có thể hữu ích về sau: sở thích tìm nhà, ngân sách, khu vực, lịch/sở thích cá nhân, quy ước của group, cách xưng hô.
+Bỏ qua chào hỏi, câu hỏi thời tiết một lần, token, secret, api key, mật khẩu, số điện thoại nếu không cần thiết.
+Không bịa thông tin.
+
+Trả về schema:
+{
+  "memories": [
+    {
+      "scope": "user",
+      "memory_type": "temporary_preference",
+      "topic": "rental",
+      "memory_key": "rental_preference",
+      "summary": "Đang tìm nhà Quận 7, tầm 8 triệu, 2 phòng ngủ.",
+      "value": {"district":"Quận 7","budget_max":8000000,"bedrooms":2},
+      "confidence": 0.9,
+      "importance": 4,
+      "ttl_days": 14
+    }
+  ]
+}
+
+Tin nhắn: ${redactSensitiveText(text)}
+Chat type: ${message.chat?.chat_type || ""}
+Người gửi: ${message.from?.display_name || ""}
+`;
+
+    try {
+      const result = await askGemini(env, prompt, {
+        feature: "memory_extractor",
+        message
+      });
+      const parsed = parseJsonFromText(result, {});
+
+      if (Array.isArray(parsed.memories)) {
+        entries.push(...parsed.memories);
+      }
+    } catch (error) {
+      console.error("Memory extractor failed:", error);
+    }
+  }
+
+  return saveMemoryEntries(env, message, entries);
+}
+
+async function getLayeredMemoryContext(env, message, question = "") {
+  if (!env.DB) {
+    return { user_memories: [], group_memories: [], chat_memories: [], relevant_memories: [] };
+  }
+
+  try {
+    const chatId = message.chat?.id || "";
+    const userId = message.from?.id || "";
+    const result = await env.DB.prepare(
+      `SELECT id, scope, chat_id, chat_type, chat_title, user_id, user_name, memory_type, topic,
+              memory_key, summary, value_json, confidence, importance, expires_at, updated_at, last_seen_at
+       FROM chat_memories
+       WHERE (chat_id = ? OR user_id = ? OR scope = 'global')
+         AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+       ORDER BY importance DESC, datetime(updated_at) DESC
+       LIMIT 40`
+    )
+      .bind(chatId, userId)
+      .all();
+    const rows = (result.results || []).map((row) => ({
+      ...row,
+      value: safeJsonParse(row.value_json, {})
+    }));
+    const keywords = extractMemoryKeywords(question);
+    const isRelevant = (row) => {
+      if (keywords.length === 0) {
+        return false;
+      }
+
+      const haystack = normalizeText(`${row.topic} ${row.memory_key} ${row.summary} ${row.value_json || ""}`);
+      return keywords.some((keyword) => haystack.includes(keyword));
+    };
+
+    return {
+      user_memories: rows.filter((row) => row.scope === "user").slice(0, 12),
+      group_memories: rows.filter((row) => row.scope === "group").slice(0, 12),
+      chat_memories: rows.filter((row) => row.scope === "chat").slice(0, 12),
+      relevant_memories: rows.filter(isRelevant).slice(0, 12),
+      all: rows
+    };
+  } catch (error) {
+    console.error("Failed to read memories:", error);
+    return { user_memories: [], group_memories: [], chat_memories: [], relevant_memories: [] };
+  }
+}
+
+async function getGlobalMemoryContext(env, question = "") {
+  if (!env.DB) {
+    return { user_memories: [], group_memories: [], chat_memories: [], relevant_memories: [], all: [] };
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT id, scope, chat_id, chat_type, chat_title, user_id, user_name, memory_type, topic,
+              memory_key, summary, value_json, confidence, importance, expires_at, updated_at, last_seen_at
+       FROM chat_memories
+       WHERE expires_at IS NULL OR datetime(expires_at) > datetime('now')
+       ORDER BY importance DESC, datetime(updated_at) DESC
+       LIMIT 60`
+    ).all();
+    const rows = (result.results || []).map((row) => ({
+      ...row,
+      value: safeJsonParse(row.value_json, {})
+    }));
+    const keywords = extractMemoryKeywords(question);
+    const relevant = rows.filter((row) => {
+      const haystack = normalizeText(`${row.topic} ${row.memory_key} ${row.summary} ${row.value_json || ""}`);
+      return keywords.some((keyword) => haystack.includes(keyword));
+    });
+
+    return {
+      user_memories: rows.filter((row) => row.scope === "user").slice(0, 16),
+      group_memories: rows.filter((row) => row.scope === "group").slice(0, 16),
+      chat_memories: rows.filter((row) => row.scope === "chat").slice(0, 16),
+      relevant_memories: relevant.slice(0, 16),
+      all: rows
+    };
+  } catch (error) {
+    console.error("Failed to read global memories:", error);
+    return { user_memories: [], group_memories: [], chat_memories: [], relevant_memories: [], all: [] };
+  }
+}
+
+function compactMemoryForPrompt(memoryContext = {}) {
+  const compact = (rows = []) =>
+    rows.slice(0, 8).map((row) => ({
+      scope: row.scope,
+      type: row.memory_type,
+      topic: row.topic,
+      key: row.memory_key,
+      summary: row.summary,
+      value: row.value || safeJsonParse(row.value_json, {}),
+      confidence: row.confidence,
+      updated_at: row.updated_at
+    }));
+
+  return {
+    user_memories: compact(memoryContext.user_memories),
+    group_memories: compact(memoryContext.group_memories),
+    chat_memories: compact(memoryContext.chat_memories),
+    relevant_memories: compact(memoryContext.relevant_memories)
+  };
+}
+
+function enrichQuestionWithMemory(question, memoryContext = {}) {
+  const memories = [
+    ...(memoryContext.relevant_memories || []),
+    ...(memoryContext.user_memories || []),
+    ...(memoryContext.group_memories || [])
+  ];
+  const rentalMemory = memories.find((memory) => memory.topic === "rental");
+
+  if (!rentalMemory || String(question || "").length > 120) {
+    return question;
+  }
+
+  return `${question}\nNgữ cảnh đã nhớ: ${rentalMemory.summary}`;
+}
+
 async function saveLink(env, message, url, urlInfo, summaryInfo, sourceText = "") {
   await env.DB.prepare(
     `INSERT INTO links
@@ -2896,6 +3278,17 @@ function formatChatContextFallback(context, scopeLabel = "nhóm này") {
     );
   }
 
+  const memories = context.memory?.all || [];
+
+  if (memories.length > 0) {
+    lines.push(
+      `\nTrí nhớ gần nhất:\n${memories
+        .slice(0, 5)
+        .map((memory, index) => `${index + 1}. ${memory.summary}`)
+        .join("\n")}`
+    );
+  }
+
   return limitText(lines.join("\n"));
 }
 
@@ -2903,6 +3296,9 @@ async function answerContextQuestion(env, message, question) {
   const chatId = message.chat?.id || "";
   const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
   const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, chatId);
+  context.memory = canViewGlobal
+    ? await getGlobalMemoryContext(env, question)
+    : await getLayeredMemoryContext(env, message, question);
   const scopeLabel = canViewGlobal ? "tất cả chat/group" : isPrivateChat(message) ? "chat riêng này" : "nhóm này";
 
   if (isPrivateChat(message) && !canViewGlobal && getOwnerUserIds(env).length > 0) {
@@ -2917,6 +3313,7 @@ async function answerContextQuestion(env, message, question) {
     scope: scopeLabel,
     counts: context.counts,
     chats: context.chats || [],
+    memory: compactMemoryForPrompt(context.memory),
     recent_messages: context.messages.map((row) => ({
       chat_id: row.chat_id,
       chat_type: row.chat_type,
@@ -2985,6 +3382,7 @@ function buildConversationContext(context, scopeLabel) {
     scope: scopeLabel,
     counts: context.counts,
     chats: context.chats || [],
+    memory: compactMemoryForPrompt(context.memory),
     recent_messages: context.messages.slice(0, 10).map((row) => ({
       chat_id: row.chat_id,
       chat_type: row.chat_type,
@@ -3026,6 +3424,9 @@ function buildConversationContext(context, scopeLabel) {
 async function getVisibleContext(env, message) {
   const canViewGlobal = isPrivateChat(message) && isOwnerMessage(env, message);
   const context = canViewGlobal ? await getGlobalContext(env) : await getChatContext(env, message.chat?.id || "");
+  context.memory = canViewGlobal
+    ? await getGlobalMemoryContext(env, getMessageText(message))
+    : await getLayeredMemoryContext(env, message, getMessageText(message));
   const scopeLabel = canViewGlobal ? "tất cả chat/group" : isPrivateChat(message) ? "chat riêng này" : "nhóm này";
 
   return { context, scopeLabel, canViewGlobal };
@@ -3157,7 +3558,7 @@ async function answerGeneralQuestion(env, message, question) {
   }
 
   const compactContext = buildConversationContext(context, scopeLabel);
-const prompt = `
+  const prompt = `
 Bạn là trợ lý Zalo nói chuyện tự nhiên như một người bình thường, nhưng ngắn gọn và hữu ích.
 Profile bot:
 ${getBotProfilePrompt(botProfile)}
@@ -3213,6 +3614,9 @@ function getHelpText() {
 async function answerQuestion(env, message, question) {
   const chatId = message.chat?.id;
   const normalized = normalizeText(question);
+  const memoryContext = await getLayeredMemoryContext(env, message, question);
+  const memoryPrompt = compactMemoryForPrompt(memoryContext);
+  const enrichedQuestion = enrichQuestionWithMemory(question, memoryContext);
 
   if (!env.DB) {
     return "Chưa cấu hình database Cloudflare D1.";
@@ -3242,8 +3646,8 @@ async function answerQuestion(env, message, question) {
 
   if (links.length === 0) {
     try {
-      const result = await searchWeb(env, question, message);
-      await saveSearch(env, message, question, result.answer, result.sources);
+      const result = await searchWeb(env, enrichedQuestion, message);
+      await saveSearch(env, message, enrichedQuestion, result.answer, result.sources);
       return result.answer || "Chưa tìm được kết quả phù hợp.";
     } catch (error) {
       console.error(error);
@@ -3253,8 +3657,8 @@ async function answerQuestion(env, message, question) {
 
   if (wantsWebSearch(question)) {
     try {
-      const result = await searchWeb(env, question, message);
-      await saveSearch(env, message, question, result.answer, result.sources);
+      const result = await searchWeb(env, enrichedQuestion, message);
+      await saveSearch(env, message, enrichedQuestion, result.answer, result.sources);
       return result.answer || "Chưa tìm được kết quả phù hợp.";
     } catch (error) {
       console.error(error);
@@ -3278,9 +3682,14 @@ async function answerQuestion(env, message, question) {
   const prompt = `
 Bạn là trợ lý quản lý link thuê nhà trong nhóm Zalo.
 Trả lời ngắn gọn, thực dụng, bằng tiếng Việt có dấu.
-Chỉ dựa vào danh sách link đã lưu bên dưới. Nếu không đủ thông tin thì nói chưa rõ.
+Ưu tiên dùng trí nhớ liên quan để hiểu câu hỏi ngắn/cụt.
+Chỉ dựa vào trí nhớ và danh sách link đã lưu bên dưới. Nếu không đủ thông tin thì nói chưa rõ.
 
 Câu hỏi: ${question}
+Câu hỏi đã bổ sung ngữ cảnh: ${enrichedQuestion}
+
+Trí nhớ JSON:
+${JSON.stringify(memoryPrompt).slice(0, 6000)}
 
 Danh sách link:
 ${context}
@@ -3341,6 +3750,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
     .join("\n");
 
   await saveMessage(env, message, eventName);
+  await extractAndSaveMemories(env, message, text);
 
   const dashboardKeyReply = answerDashboardKey(env, message);
 
@@ -3648,6 +4058,24 @@ Caption: ${caption}
       )
       .run();
   }
+
+  await saveMemoryEntries(env, message, [
+    {
+      scope: "chat",
+      memory_type: "recent_image_context",
+      topic: isRentalQuestion(caption) || isRentalQuestion(answer) ? "rental" : "image",
+      memory_key: `image_${message.message_id || Date.now()}`,
+      summary: limitText(`Ảnh gần đây: ${caption ? `${caption}. ` : ""}${answer}`, 450),
+      value: {
+        caption: redactSensitiveText(caption),
+        analysis: redactSensitiveText(answer),
+        photo_source: imageInfo?.source || ""
+      },
+      confidence: 0.75,
+      importance: 3,
+      ttl_days: 7
+    }
+  ]);
 
   return limitText(answer);
 }
@@ -4112,45 +4540,47 @@ async function handleDashboardData(request, env) {
     aiStatsResult,
     aiUsageResult,
     chatSettingsResult,
-    remindersResult
+    remindersResult,
+    memoriesResult
   ] =
     await Promise.all([
-    env.DB.prepare(
-      `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
+      env.DB.prepare(
+        `SELECT 'messages' AS name, COUNT(*) AS total FROM messages
        UNION ALL SELECT 'links' AS name, COUNT(*) AS total FROM links
        UNION ALL SELECT 'searches' AS name, COUNT(*) AS total FROM searches
        UNION ALL SELECT 'images' AS name, COUNT(*) AS total FROM images
        UNION ALL SELECT 'ai_usage' AS name, COUNT(*) AS total FROM ai_usage
        UNION ALL SELECT 'chat_settings' AS name, COUNT(*) AS total FROM chat_settings
-       UNION ALL SELECT 'reminders' AS name, COUNT(*) AS total FROM reminders`
-    ).all(),
-    env.DB.prepare(
-      `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json, created_at
+       UNION ALL SELECT 'reminders' AS name, COUNT(*) AS total FROM reminders
+       UNION ALL SELECT 'chat_memories' AS name, COUNT(*) AS total FROM chat_memories`
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, chat_id, chat_type, user_id, user_name, message_id, text, message_date, metadata_json, created_at
        FROM messages
        ORDER BY datetime(created_at) DESC
        LIMIT 40`
-    ).all(),
-    env.DB.prepare(
-      `SELECT id, chat_id, chat_type, user_name, message_id, url, source_text, title, description,
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, chat_id, chat_type, user_name, message_id, url, source_text, title, description,
               summary, price_text, area_text, status, http_status, metadata_json, last_checked_at, created_at, updated_at
        FROM links
        ORDER BY datetime(updated_at) DESC
        LIMIT 60`
-    ).all(),
-    env.DB.prepare(
-      `SELECT id, chat_id, user_name, query, answer, sources_json, metadata_json, created_at
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, chat_id, user_name, query, answer, sources_json, metadata_json, created_at
        FROM searches
        ORDER BY datetime(created_at) DESC
        LIMIT 30`
-    ).all(),
-    env.DB.prepare(
-      `SELECT id, chat_id, user_name, message_id, photo_url, caption, analysis, metadata_json, created_at
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, chat_id, user_name, message_id, photo_url, caption, analysis, metadata_json, created_at
        FROM images
        ORDER BY datetime(created_at) DESC
        LIMIT 30`
-    ).all(),
-    env.DB.prepare(
-      `SELECT
+      ).all(),
+      env.DB.prepare(
+        `SELECT
          COUNT(*) AS calls_total,
          SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END) AS calls_ok,
          SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS calls_error,
@@ -4162,16 +4592,16 @@ async function handleDashboardData(request, env) {
          SUM(CASE WHEN ok = 0 AND created_at >= datetime('now', '-1 day') THEN 1 ELSE 0 END) AS errors_24h,
          SUM(CASE WHEN created_at >= datetime('now', '-1 day') THEN total_tokens ELSE 0 END) AS tokens_24h
        FROM ai_usage`
-    ).all(),
-    env.DB.prepare(
-      `SELECT id, provider, model, feature, chat_id, chat_type, user_name, ok, http_status, error_code,
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, provider, model, feature, chat_id, chat_type, user_name, ok, http_status, error_code,
               error_message, prompt_tokens, output_tokens, total_tokens, metadata_json, created_at
        FROM ai_usage
        ORDER BY datetime(created_at) DESC
        LIMIT 60`
-    ).all(),
-    env.DB.prepare(
-      `SELECT settings.chat_id,
+      ).all(),
+      env.DB.prepare(
+        `SELECT settings.chat_id,
               settings.chat_type,
               COALESCE(NULLIF(alias.chat_title, ''), settings.chat_title) AS chat_title,
               settings.user_name,
@@ -4185,9 +4615,9 @@ async function handleDashboardData(request, env) {
        LEFT JOIN chat_aliases AS alias ON alias.chat_id = settings.chat_id
        ORDER BY datetime(settings.updated_at) DESC
        LIMIT 60`
-    ).all(),
-    env.DB.prepare(
-      `SELECT reminders.id,
+      ).all(),
+      env.DB.prepare(
+        `SELECT reminders.id,
               reminders.chat_id,
               reminders.chat_type,
               COALESCE(NULLIF(alias.chat_title, ''), reminders.chat_title) AS chat_title,
@@ -4207,8 +4637,18 @@ async function handleDashboardData(request, env) {
          CASE WHEN reminders.status = 'pending' THEN 0 ELSE 1 END,
          datetime(reminders.due_at_utc) ASC
        LIMIT 80`
-    ).all()
-  ]);
+      ).all(),
+      env.DB.prepare(
+        `SELECT id, scope, chat_id, chat_type, COALESCE(NULLIF(alias.chat_title, ''), memories.chat_title) AS chat_title,
+              user_id, user_name, memory_type, topic, memory_key, summary, value_json,
+              confidence, importance, expires_at, updated_at, last_seen_at
+       FROM chat_memories AS memories
+       LEFT JOIN chat_aliases AS alias ON alias.chat_id = memories.chat_id
+       WHERE expires_at IS NULL OR datetime(expires_at) > datetime('now')
+       ORDER BY importance DESC, datetime(updated_at) DESC
+       LIMIT 100`
+      ).all()
+    ]);
   const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
   const aiStats = aiStatsResult.results?.[0] || {};
   const botProfile = await getBotProfile(env);
@@ -4224,7 +4664,8 @@ async function handleDashboardData(request, env) {
       images: counts.images || 0,
       ai_usage: counts.ai_usage || 0,
       chat_settings: counts.chat_settings || 0,
-      reminders: counts.reminders || 0
+      reminders: counts.reminders || 0,
+      chat_memories: counts.chat_memories || 0
     },
     ai_usage: {
       stats: {
@@ -4266,6 +4707,10 @@ async function handleDashboardData(request, env) {
       reminders: (remindersResult.results || []).map((row) => ({
         ...row,
         metadata: safeJsonParse(row.metadata_json)
+      })),
+      memories: (memoriesResult.results || []).map((row) => ({
+        ...row,
+        value: safeJsonParse(row.value_json)
       }))
     }
   });
