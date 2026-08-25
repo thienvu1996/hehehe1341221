@@ -26,8 +26,46 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { BloubMark } from "./bloub-mark";
 
-const API_URL = process.env.NEXT_PUBLIC_BOT_API_URL || "https://bot.jean1331.io.vn";
+const PRIMARY_API_URL = process.env.NEXT_PUBLIC_BOT_API_URL || "https://bot.jean1331.io.vn";
+const FALLBACK_API_URL = "https://hehehe1341221.vuthien616.workers.dev";
+const API_URLS = Array.from(new Set([PRIMARY_API_URL, FALLBACK_API_URL].filter(Boolean)));
 const PAGE_SIZE = 10;
+
+async function fetchBotApi(path: string, init: RequestInit = {}) {
+  let lastError: unknown;
+
+  for (const baseUrl of API_URLS) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        mode: "cors",
+        cache: init.cache || "no-store"
+      });
+
+      return { response, apiUrl: baseUrl };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Không gọi được API bot.");
+}
+
+function formatDashboardError(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+
+  if (/failed to fetch|network request failed|load failed/i.test(error.message)) {
+    return `Không gọi được API bot. Dashboard đã thử ${API_URLS.join(" và ")}. Hãy tải lại trang bằng Ctrl+F5 rồi nhập key lại.`;
+  }
+
+  if (error.message === "Unauthorized" || error.message === "Session expired") {
+    return "Key hết hạn hoặc không đúng.";
+  }
+
+  return error.message;
+}
 
 type MessageRow = {
   id: number;
@@ -993,7 +1031,7 @@ export function DashboardApp() {
     setError("");
 
     try {
-      const response = await fetch(`${API_URL}/admin/dashboard-session`, {
+      const { response } = await fetchBotApi("/admin/dashboard-session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -1015,7 +1053,7 @@ export function DashboardApp() {
       sessionStorage.removeItem("dashboardSession");
       setSessionToken("");
       setData(null);
-      setError(loginError instanceof Error ? loginError.message : "Khong mo duoc dashboard");
+      setError(formatDashboardError(loginError, "Không mở được dashboard."));
     } finally {
       setIsLoading(false);
     }
@@ -1030,7 +1068,7 @@ export function DashboardApp() {
     setError("");
 
     try {
-      const response = await fetch(`${API_URL}/admin/dashboard-data`, {
+      const { response } = await fetchBotApi("/admin/dashboard-data", {
         headers: {
           "X-Dashboard-Token": currentToken
         },
@@ -1050,7 +1088,7 @@ export function DashboardApp() {
       }
 
       setData(null);
-      setError(loadError instanceof Error ? loadError.message : "Khong tai duoc du lieu");
+      setError(formatDashboardError(loadError, "Không tải được dữ liệu."));
     } finally {
       setIsLoading(false);
     }
@@ -1061,7 +1099,7 @@ export function DashboardApp() {
       throw new Error("Session đã hết hạn, hãy đăng nhập lại.");
     }
 
-    const response = await fetch(`${API_URL}/admin/bot-profile`, {
+    const { response } = await fetchBotApi("/admin/bot-profile", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1095,9 +1133,7 @@ export function DashboardApp() {
   }, [sessionToken]);
 
   if (!sessionToken || (!data && error)) {
-    const displayError = error === "Unauthorized" || error === "Session expired" ? "Key het han hoac khong dung." : error;
-
-    return <TokenGate onLogin={login} isLoading={isLoading} error={displayError} />;
+    return <TokenGate onLogin={login} isLoading={isLoading} error={error} />;
   }
 
   return (
