@@ -220,6 +220,8 @@ Dashboard dang nhap qua endpoint Worker `POST /admin/dashboard-session`, roi doc
 `GET /admin/dashboard-data` bang session token 30 phut.
 Dashboard co tab `AI quota` de xem usage bot da ghi nhan. Gemini API khong tra ve so quota con lai
 truc tiep, nen dashboard hien so call/token da dung va cac loi quota/rate limit neu co.
+Dashboard co tab `Bot` de cau hinh persona bot nhu ten, gioi tinh/cach xung ho, do tuoi/vai dien,
+phong cach noi va mo ta tinh cach. Cau hinh nay duoc luu trong D1 va duoc dua vao prompt tra loi tu nhien.
 Moi tab du lieu tu dong phan trang 10 dong/trang khi ket qua dai.
 
 URL dang deploy:

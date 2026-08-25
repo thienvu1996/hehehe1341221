@@ -125,9 +125,20 @@ type ReminderRow = {
   metadata?: Record<string, unknown>;
 };
 
+type BotProfile = {
+  display_name: string;
+  gender: string;
+  age: string;
+  speaking_style: string;
+  persona: string;
+  default_language: string;
+  updated_at?: string;
+};
+
 type DashboardData = {
   ok: boolean;
   generated_at: string;
+  profile: BotProfile;
   counts: {
     messages: number;
     links: number;
@@ -162,7 +173,7 @@ type DashboardData = {
   };
 };
 
-type TabKey = "links" | "searches" | "images" | "messages" | "schedules" | "ai";
+type TabKey = "links" | "searches" | "images" | "messages" | "schedules" | "profile" | "ai";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Link2 }> = [
   { key: "links", label: "Link nha", icon: Link2 },
@@ -170,6 +181,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof Link2 }> = [
   { key: "images", label: "Anh", icon: ImageIcon },
   { key: "messages", label: "Tin nhan", icon: MessageSquareText },
   { key: "schedules", label: "Lich", icon: CalendarClock },
+  { key: "profile", label: "Bot", icon: Bot },
   { key: "ai", label: "AI quota", icon: Gauge }
 ];
 
@@ -731,6 +743,146 @@ function SchedulePanel({
   );
 }
 
+function BotProfilePanel({
+  profile,
+  onSave
+}: {
+  profile?: BotProfile;
+  onSave: (profile: BotProfile) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<BotProfile>({
+    display_name: "",
+    gender: "",
+    age: "",
+    speaking_style: "",
+    persona: "",
+    default_language: "vi"
+  });
+  const [status, setStatus] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setDraft({
+        display_name: profile.display_name || "",
+        gender: profile.gender || "",
+        age: profile.age || "",
+        speaking_style: profile.speaking_style || "",
+        persona: profile.persona || "",
+        default_language: profile.default_language || "vi"
+      });
+    }
+  }, [profile]);
+
+  const updateField = (field: keyof BotProfile, value: string) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    setStatus("");
+  };
+
+  return (
+    <form
+      className="profile-panel"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setIsSaving(true);
+        setStatus("");
+
+        try {
+          await onSave(draft);
+          setStatus("Đã lưu cấu hình bot.");
+        } catch (saveError) {
+          setStatus(saveError instanceof Error ? saveError.message : "Không lưu được cấu hình.");
+        } finally {
+          setIsSaving(false);
+        }
+      }}
+    >
+      <div className="section-head">
+        <div>
+          <p className="record-kicker">Bot persona</p>
+          <h2>Cau hinh bot</h2>
+        </div>
+        <span className="count-chip">{profile?.updated_at ? `Cap nhat ${formatDate(profile.updated_at)}` : "Mac dinh"}</span>
+      </div>
+
+      <div className="profile-grid">
+        <label className="field-block" htmlFor="bot-display-name">
+          <span>Tên bot</span>
+          <input
+            id="bot-display-name"
+            value={draft.display_name}
+            onChange={(event) => updateField("display_name", event.target.value)}
+            placeholder="Bot Thu Thập atess"
+            maxLength={80}
+          />
+        </label>
+        <label className="field-block" htmlFor="bot-gender">
+          <span>Giới tính / cách xưng hô</span>
+          <input
+            id="bot-gender"
+            value={draft.gender}
+            onChange={(event) => updateField("gender", event.target.value)}
+            placeholder="nam, nữ, trung tính, xưng mình..."
+            maxLength={60}
+          />
+        </label>
+        <label className="field-block" htmlFor="bot-age">
+          <span>Độ tuổi / vai diễn</span>
+          <input
+            id="bot-age"
+            value={draft.age}
+            onChange={(event) => updateField("age", event.target.value)}
+            placeholder="25 tuổi, trợ lý trẻ, anh/chị quản lý..."
+            maxLength={40}
+          />
+        </label>
+        <label className="field-block" htmlFor="bot-language">
+          <span>Ngôn ngữ mặc định</span>
+          <input
+            id="bot-language"
+            value={draft.default_language}
+            onChange={(event) => updateField("default_language", event.target.value)}
+            placeholder="vi"
+            maxLength={20}
+          />
+        </label>
+      </div>
+
+      <label className="field-block" htmlFor="bot-style">
+        <span>Phong cách nói</span>
+        <textarea
+          id="bot-style"
+          value={draft.speaking_style}
+          onChange={(event) => updateField("speaking_style", event.target.value)}
+          placeholder="Tự nhiên, thân thiện, hỏi lại khi thiếu thông tin..."
+          maxLength={500}
+          rows={3}
+        />
+      </label>
+
+      <label className="field-block" htmlFor="bot-persona">
+        <span>Tính cách / nhiệm vụ</span>
+        <textarea
+          id="bot-persona"
+          value={draft.persona}
+          onChange={(event) => updateField("persona", event.target.value)}
+          placeholder="Trợ lý Zalo giúp nhóm lưu link thuê nhà, nhắc lịch, thời tiết..."
+          maxLength={900}
+          rows={5}
+        />
+      </label>
+
+      <div className="profile-actions">
+        {status ? <span className={status.includes("Đã lưu") ? "save-status ok" : "save-status error"}>{status}</span> : null}
+        <button className="primary-button compact" type="submit" disabled={isSaving}>
+          {isSaving ? <Loader2 className="spin" size={18} /> : <CheckCircle2 size={18} />}
+          {isSaving ? "Dang luu..." : "Luu cau hinh"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AiUsageList({
   usage,
   query,
@@ -904,6 +1056,29 @@ export function DashboardApp() {
     }
   };
 
+  const saveProfile = async (profile: BotProfile) => {
+    if (!sessionToken) {
+      throw new Error("Session đã hết hạn, hãy đăng nhập lại.");
+    }
+
+    const response = await fetch(`${API_URL}/admin/bot-profile`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Dashboard-Token": sessionToken
+      },
+      body: JSON.stringify(profile),
+      cache: "no-store"
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.message || `HTTP ${response.status}`);
+    }
+
+    setData((current) => (current ? { ...current, profile: payload.profile || profile } : current));
+  };
+
   useEffect(() => {
     localStorage.removeItem("dashboardToken");
     const savedToken = sessionStorage.getItem("dashboardSession") || "";
@@ -1020,6 +1195,7 @@ export function DashboardApp() {
               query={query}
             />
           ) : null}
+          {data && activeTab === "profile" ? <BotProfilePanel profile={data.profile} onSave={saveProfile} /> : null}
           {data && activeTab === "ai" ? (
             <AiUsageList usage={data.ai_usage?.recent ?? []} stats={data.ai_usage?.stats} query={query} />
           ) : null}

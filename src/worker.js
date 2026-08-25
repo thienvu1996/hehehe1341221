@@ -17,6 +17,14 @@ const DEFAULT_WEATHER_PLACE = {
 const DEFAULT_WEATHER_TIME = "06:00";
 const DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh";
 const SCHEDULE_INTERVAL_MINUTES = 15;
+const DEFAULT_BOT_PROFILE = {
+  display_name: DEFAULT_BOT_DISPLAY_NAME,
+  gender: "không cố định",
+  age: "",
+  speaking_style: "Tự nhiên, thân thiện, ngắn gọn, hỏi lại khi thiếu thông tin.",
+  persona: "Trợ lý Zalo giúp thu thập link thuê nhà, đọc ảnh, nhắc lịch, thời tiết và hỗ trợ nhóm như một người phụ tá.",
+  default_language: "vi"
+};
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -464,6 +472,54 @@ function answerDashboardKey(env, message) {
   ].join("\n");
 }
 
+function normalizeBotProfile(profile = {}) {
+  return {
+    display_name: truncateForDb(profile.display_name || DEFAULT_BOT_PROFILE.display_name, 80),
+    gender: truncateForDb(profile.gender || DEFAULT_BOT_PROFILE.gender, 60),
+    age: truncateForDb(profile.age || "", 40),
+    speaking_style: truncateForDb(profile.speaking_style || DEFAULT_BOT_PROFILE.speaking_style, 500),
+    persona: truncateForDb(profile.persona || DEFAULT_BOT_PROFILE.persona, 900),
+    default_language: truncateForDb(profile.default_language || DEFAULT_BOT_PROFILE.default_language, 20),
+    updated_at: profile.updated_at || ""
+  };
+}
+
+async function getBotProfile(env) {
+  if (!env.DB) {
+    return normalizeBotProfile(DEFAULT_BOT_PROFILE);
+  }
+
+  try {
+    const row = await env.DB.prepare(
+      `SELECT display_name, gender, age, speaking_style, persona, default_language, updated_at
+       FROM bot_profile
+       WHERE id = 'default'
+       LIMIT 1`
+    ).first();
+
+    return normalizeBotProfile(row || DEFAULT_BOT_PROFILE);
+  } catch (error) {
+    console.error("Failed to read bot profile:", error);
+    return normalizeBotProfile(DEFAULT_BOT_PROFILE);
+  }
+}
+
+function getBotProfilePrompt(profile) {
+  const normalized = normalizeBotProfile(profile);
+
+  return [
+    `Tên bot: ${normalized.display_name}`,
+    `Giới tính/cách xưng hô: ${normalized.gender || "không cố định"}`,
+    normalized.age ? `Độ tuổi/vai diễn: ${normalized.age}` : "",
+    `Phong cách nói: ${normalized.speaking_style}`,
+    `Tính cách/nhiệm vụ: ${normalized.persona}`,
+    "Luôn trả lời bằng tiếng Việt có dấu.",
+    "Nếu thiếu dữ kiện quan trọng, hỏi lại đúng 1 câu ngắn trước khi kết luận."
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function normalizeScheduleMinute(hour, minute) {
   let normalizedHour = hour;
   let normalizedMinute = Math.ceil(minute / SCHEDULE_INTERVAL_MINUTES) * SCHEDULE_INTERVAL_MINUTES;
@@ -828,6 +884,7 @@ function formatLocalDate(dateParts) {
 function extractReminderTitle(text) {
   const cleanText = text
     .replace(/(lên lịch|len lich|đặt lịch|dat lich|nhắc tôi|nhac toi|nhắc mình|nhac minh|remind me)/gi, " ")
+    .replace(/^\s*(êy|ey|ê|e|ơi|oi|nè|ne|nha|nhé|nhe)\s+/i, " ")
     .replace(/\b(ngày mai|ngay mai|ngày kia|ngay kia|hôm nay|hom nay|tối nay|toi nay|chiều nay|chieu nay|sáng nay|sang nay|mai|mốt)\b/gi, " ")
     .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/gi, " ")
     .replace(/\b(?:lúc|luc|vào|vao)?\s*\d{1,2}\s*(?::|h|giờ|gio)\s*\d{0,2}\s*(?:am|pm|sáng|sang|chiều|chieu|tối|toi)?\b/gi, " ")
@@ -910,6 +967,30 @@ function isNegativeVenueAnswer(text) {
     normalized.includes("chưa có") ||
     normalized.includes("goi y") ||
     normalized.includes("gợi ý")
+  );
+}
+
+function isVenueSuggestionRequest(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    isNegativeVenueAnswer(text) ||
+    normalized.includes("ngan sach") ||
+    normalized.includes("moi nguoi") ||
+    normalized.includes("/ nguoi") ||
+    normalized.includes("/nguoi") ||
+    /\b\d+\s*k\b/.test(normalized) ||
+    /\b\d+\s*(tr|trieu)\b/.test(normalized) ||
+    normalized.includes("go vap") ||
+    normalized.includes("quan ") ||
+    normalized.includes("q1") ||
+    normalized.includes("q3") ||
+    normalized.includes("q7") ||
+    normalized.includes("q12") ||
+    normalized.includes("thu duc") ||
+    normalized.includes("binh thanh") ||
+    normalized.includes("tan binh") ||
+    normalized.includes("phu nhuan")
   );
 }
 
@@ -1241,7 +1322,7 @@ async function handleReminderDraftFollowUp(env, message, text) {
   }
 
   if (draft.waitingFor === "venue") {
-    if (isNegativeVenueAnswer(cleanText)) {
+    if (isVenueSuggestionRequest(cleanText)) {
       return suggestDiningVenues(env, message, draft, extractRecommendationArea(cleanText));
     }
 
@@ -2973,11 +3054,15 @@ async function inferConversationRoute(env, message, question) {
   }
 
   const { context, scopeLabel } = await getVisibleContext(env, message);
+  const botProfile = await getBotProfile(env);
   const compactContext = buildConversationContext(context, scopeLabel);
   const previousState = await getConversationState(env, message.chat?.id || "");
   const prompt = `
 Bạn là bộ định tuyến ý định cho Zalo bot. Chỉ trả về JSON hợp lệ, không viết giải thích.
 Nhiệm vụ: đọc tin nhắn mới, state cũ và context gần nhất để hiểu người dùng đang muốn gì như một người đang nói chuyện tự nhiên.
+
+Profile bot:
+${getBotProfilePrompt(botProfile)}
 
 Intent hợp lệ:
 - weather: hỏi thời tiết/dự báo/mưa/nóng/lạnh.
@@ -3045,6 +3130,7 @@ ${JSON.stringify(compactContext).slice(0, 12000)}
 
 async function answerGeneralQuestion(env, message, question) {
   const { context, scopeLabel } = await getVisibleContext(env, message);
+  const botProfile = await getBotProfile(env);
 
   if (isWeatherQuestion(question)) {
     try {
@@ -3071,9 +3157,11 @@ async function answerGeneralQuestion(env, message, question) {
   }
 
   const compactContext = buildConversationContext(context, scopeLabel);
-  const prompt = `
+const prompt = `
 Bạn là trợ lý Zalo nói chuyện tự nhiên như một người bình thường, nhưng ngắn gọn và hữu ích.
-Trả lời bằng tiếng Việt có dấu.
+Profile bot:
+${getBotProfilePrompt(botProfile)}
+
 Nếu câu hỏi liên quan đến dữ liệu nhóm/chat, hãy dựa vào Context JSON.
 Nếu câu hỏi là kiến thức chung, hãy trả lời theo hiểu biết của bạn.
 Nếu câu hỏi cần dữ liệu thời gian thực mà web search không có kết quả trong context, hãy nói rõ cần search lại hoặc cần địa điểm/cụ thể hơn.
@@ -4123,10 +4211,12 @@ async function handleDashboardData(request, env) {
   ]);
   const counts = Object.fromEntries((countsResult.results || []).map((row) => [row.name, row.total]));
   const aiStats = aiStatsResult.results?.[0] || {};
+  const botProfile = await getBotProfile(env);
 
   return dashboardJson(request, {
     ok: true,
     generated_at: new Date().toISOString(),
+    profile: botProfile,
     counts: {
       messages: counts.messages || 0,
       links: counts.links || 0,
@@ -4178,6 +4268,49 @@ async function handleDashboardData(request, env) {
         metadata: safeJsonParse(row.metadata_json)
       }))
     }
+  });
+}
+
+async function handleDashboardBotProfile(request, env) {
+  const unauthorizedResponse = await authorizeDashboardRequest(request, env);
+
+  if (unauthorizedResponse) {
+    return dashboardJson(request, await unauthorizedResponse.json(), unauthorizedResponse.status);
+  }
+
+  if (!env.DB) {
+    return dashboardJson(request, { ok: false, message: "Cloudflare D1 is not configured" }, 500);
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const profile = normalizeBotProfile(body);
+
+  await env.DB.prepare(
+    `INSERT INTO bot_profile
+      (id, display_name, gender, age, speaking_style, persona, default_language, updated_at)
+     VALUES ('default', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       display_name = excluded.display_name,
+       gender = excluded.gender,
+       age = excluded.age,
+       speaking_style = excluded.speaking_style,
+       persona = excluded.persona,
+       default_language = excluded.default_language,
+       updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(
+      profile.display_name,
+      profile.gender,
+      profile.age,
+      profile.speaking_style,
+      profile.persona,
+      profile.default_language
+    )
+    .run();
+
+  return dashboardJson(request, {
+    ok: true,
+    profile: await getBotProfile(env)
   });
 }
 
@@ -4252,7 +4385,10 @@ export default {
       return handleSendDailyWeather(request, env);
     }
 
-    if (request.method === "OPTIONS" && ["/admin/dashboard-data", "/admin/dashboard-session"].includes(url.pathname)) {
+    if (
+      request.method === "OPTIONS" &&
+      ["/admin/dashboard-data", "/admin/dashboard-session", "/admin/bot-profile"].includes(url.pathname)
+    ) {
       return new Response(null, {
         status: 204,
         headers: getDashboardCorsHeaders(request)
@@ -4265,6 +4401,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/admin/dashboard-data") {
       return handleDashboardData(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/admin/bot-profile") {
+      return handleDashboardBotProfile(request, env);
     }
 
     return json({ message: "Not Found" }, 404);
