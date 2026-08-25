@@ -1368,6 +1368,310 @@ async function handleReminderCommand(env, message, text) {
   return saveReminder(env, message, parsed);
 }
 
+function isAdminPrivateMessage(env, message) {
+  return isPrivateChat(message) && isOwnerMessage(env, message);
+}
+
+async function getKnownGroupChats(env, limit = 20) {
+  if (!env.DB) {
+    return [];
+  }
+
+  try {
+    const result = await env.DB.prepare(
+      `SELECT chat_id,
+              COALESCE(NULLIF(MAX(chat_type), ''), 'GROUP') AS chat_type,
+              COALESCE(NULLIF(MAX(chat_title), ''), chat_id) AS chat_title,
+              MAX(last_seen) AS last_seen
+       FROM (
+         SELECT chat_id,
+                chat_type,
+                COALESCE(NULLIF(json_extract(metadata_json, '$.chat.title'), ''), '') AS chat_title,
+                MAX(created_at) AS last_seen
+         FROM messages
+         WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
+         GROUP BY chat_id, chat_type
+         UNION ALL
+         SELECT chat_id, chat_type, '' AS chat_title, MAX(created_at) AS last_seen
+         FROM links
+         WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
+         GROUP BY chat_id, chat_type
+         UNION ALL
+         SELECT chat_id, chat_type, '' AS chat_title, MAX(created_at) AS last_seen
+         FROM images
+         WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
+         GROUP BY chat_id, chat_type
+         UNION ALL
+         SELECT chat_id, chat_type, chat_title, MAX(updated_at) AS last_seen
+         FROM chat_settings
+         WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
+         GROUP BY chat_id, chat_type, chat_title
+         UNION ALL
+         SELECT chat_id, chat_type, chat_title, MAX(created_at) AS last_seen
+         FROM reminders
+         WHERE chat_id != '' AND LOWER(COALESCE(chat_type, '')) NOT LIKE '%private%'
+         GROUP BY chat_id, chat_type, chat_title
+       )
+       GROUP BY chat_id
+       ORDER BY datetime(last_seen) DESC
+       LIMIT ?`
+    )
+      .bind(limit)
+      .all();
+
+    return result.results || [];
+  } catch (error) {
+    console.error("Failed to load known groups:", error);
+    return [];
+  }
+}
+
+async function getAdminSelectedChat(env, ownerUserId) {
+  if (!env.DB || !ownerUserId) {
+    return null;
+  }
+
+  try {
+    return await env.DB.prepare(
+      `SELECT selected_chat_id AS chat_id,
+              selected_chat_type AS chat_type,
+              selected_chat_title AS chat_title,
+              updated_at
+       FROM admin_selections
+       WHERE owner_user_id = ?
+       LIMIT 1`
+    )
+      .bind(ownerUserId)
+      .first();
+  } catch (error) {
+    console.error("Failed to read admin selected chat:", error);
+    return null;
+  }
+}
+
+async function saveAdminSelectedChat(env, ownerUserId, chat) {
+  if (!env.DB || !ownerUserId || !chat?.chat_id) {
+    return;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO admin_selections
+      (owner_user_id, selected_chat_id, selected_chat_type, selected_chat_title, updated_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(owner_user_id) DO UPDATE SET
+       selected_chat_id = excluded.selected_chat_id,
+       selected_chat_type = excluded.selected_chat_type,
+       selected_chat_title = excluded.selected_chat_title,
+       updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(ownerUserId, chat.chat_id, chat.chat_type || "GROUP", chat.chat_title || "")
+    .run();
+}
+
+function formatKnownGroupChats(chats, selectedChat = null) {
+  if (chats.length === 0) {
+    return "Bot chưa thấy group nào trong DB. Hãy nhắn/tag bot trong group trước để bot biết group id.";
+  }
+
+  const lines = chats.map((chat, index) => {
+    const selectedMark = selectedChat?.chat_id === chat.chat_id ? " (đang chọn)" : "";
+    const title = chat.chat_title && chat.chat_title !== chat.chat_id ? chat.chat_title : `Group ${chat.chat_id.slice(0, 6)}...`;
+
+    return `${index + 1}. ${title}${selectedMark}`;
+  });
+
+  return [
+    "Các nhóm bot đã biết:",
+    lines.join("\n"),
+    "",
+    "Dùng:",
+    "- chọn nhóm 1",
+    "- gửi nhóm đã chọn: nội dung",
+    "- set nhóm đã chọn thời tiết 6h HCM",
+    "- lên lịch nhóm đã chọn mai 18h họp team"
+  ].join("\n");
+}
+
+function createMessageForTargetChat(sourceMessage, targetChat, text) {
+  return {
+    ...sourceMessage,
+    chat: {
+      id: targetChat.chat_id || targetChat.selected_chat_id || "",
+      chat_type: targetChat.chat_type || targetChat.selected_chat_type || "GROUP",
+      title: targetChat.chat_title || targetChat.selected_chat_title || ""
+    },
+    message_id: `${sourceMessage.message_id || Date.now()}-${targetChat.chat_id || targetChat.selected_chat_id}`,
+    text
+  };
+}
+
+function parseAdminTargetIndex(text) {
+  const normalized = normalizeText(text);
+  const match =
+    normalized.match(/\b(?:nhom|group)\s+(\d{1,2})\b/) ||
+    normalized.match(/\b(?:chon|chọn)\s+(\d{1,2})\b/);
+
+  return match ? Number(match[1]) : null;
+}
+
+function stripAdminTargetWords(text) {
+  return text
+    .replace(/\b(?:nhóm|nhom|group)\s+(?:đã chọn|da chon|\d{1,2})\b/gi, " ")
+    .replace(/\b(?:đã chọn|da chon)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function resolveAdminTargetChat(env, message, text) {
+  const ownerUserId = String(message.from?.id || "");
+  const groups = await getKnownGroupChats(env);
+  const index = parseAdminTargetIndex(text);
+
+  if (index !== null) {
+    const target = groups[index - 1] || null;
+
+    return { target, groups, index };
+  }
+
+  return {
+    target: await getAdminSelectedChat(env, ownerUserId),
+    groups,
+    index: null
+  };
+}
+
+function getAdminPayloadAfterPrefix(text, patterns) {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+
+    if (match) {
+      return (match[1] || "").trim();
+    }
+  }
+
+  return "";
+}
+
+async function getTargetDraftStatus(env, targetChat) {
+  if (!targetChat?.chat_id) {
+    return null;
+  }
+
+  const state = await getConversationState(env, targetChat.chat_id);
+
+  return state?.pending_reminder || null;
+}
+
+async function handleAdminTargetCommand(env, message, text) {
+  if (!isAdminPrivateMessage(env, message)) {
+    return null;
+  }
+
+  const cleanText = getCleanQuestion(text, message.chat?.title || "");
+  const normalized = normalizeText(cleanText);
+  const ownerUserId = String(message.from?.id || "");
+
+  if (
+    normalized.includes("danh sach nhom") ||
+    normalized.includes("xem nhom") ||
+    normalized.includes("liet ke nhom") ||
+    normalized === "nhom"
+  ) {
+    const selected = await getAdminSelectedChat(env, ownerUserId);
+
+    return formatKnownGroupChats(await getKnownGroupChats(env), selected);
+  }
+
+  if (normalized.startsWith("chon nhom ") || normalized.startsWith("chọn nhóm ") || normalized.startsWith("chon group ")) {
+    const groups = await getKnownGroupChats(env);
+    const index = parseAdminTargetIndex(cleanText);
+    const target = index ? groups[index - 1] : null;
+
+    if (!target) {
+      return formatKnownGroupChats(groups);
+    }
+
+    await saveAdminSelectedChat(env, ownerUserId, target);
+
+    return [
+      `Đã chọn nhóm: ${target.chat_title || target.chat_id}.`,
+      "Giờ bạn có thể nhắn:",
+      "- gửi nhóm đã chọn: nội dung",
+      "- set nhóm đã chọn thời tiết 6h HCM",
+      "- lên lịch nhóm đã chọn mai 18h họp team"
+    ].join("\n");
+  }
+
+  if (normalized.includes("nhom dang chon") || normalized.includes("group dang chon")) {
+    const selected = await getAdminSelectedChat(env, ownerUserId);
+
+    return selected ? `Nhóm đang chọn: ${selected.chat_title || selected.chat_id}` : "Bạn chưa chọn nhóm nào. Nhắn: xem nhóm";
+  }
+
+  const isSendToGroup = normalized.startsWith("gui nhom") || normalized.startsWith("gửi nhóm");
+  const isSetGroup = normalized.startsWith("set nhom") || normalized.startsWith("set nhóm") || normalized.startsWith("cai nhom") || normalized.startsWith("cài nhóm");
+  const isReminderForGroup = normalized.startsWith("len lich nhom") || normalized.startsWith("lên lịch nhóm") || normalized.startsWith("nhac nhom") || normalized.startsWith("nhắc nhóm");
+
+  if (isSendToGroup || isSetGroup || isReminderForGroup) {
+    const { target, groups, index } = await resolveAdminTargetChat(env, message, cleanText);
+
+    if (!target) {
+      return index ? `Không thấy nhóm số ${index}. Nhắn "xem nhóm" để xem danh sách.` : "Bạn chưa chọn nhóm. Nhắn: xem nhóm, rồi chọn nhóm 1.";
+    }
+
+    const payload = getAdminPayloadAfterPrefix(cleanText, [
+      /^(?:gửi|gui)\s+(?:nhóm|nhom|group)\s+(?:đã chọn|da chon|\d{1,2})\s*[:,-]?\s*(.+)$/i,
+      /^(?:gửi|gui)\s+(?:nhóm|nhom|group)\s*[:,-]?\s*(.+)$/i,
+      /^(?:set|cài|cai)\s+(?:nhóm|nhom|group)\s+(?:đã chọn|da chon|\d{1,2})\s*[:,-]?\s*(.+)$/i,
+      /^(?:set|cài|cai)\s+(?:nhóm|nhom|group)\s*[:,-]?\s*(.+)$/i,
+      /^(?:lên lịch|len lich|nhắc|nhac)\s+(?:nhóm|nhom|group)\s+(?:đã chọn|da chon|\d{1,2})\s*[:,-]?\s*(.+)$/i,
+      /^(?:lên lịch|len lich|nhắc|nhac)\s+(?:nhóm|nhom|group)\s*[:,-]?\s*(.+)$/i
+    ]);
+
+    if (!payload) {
+      return "Bạn muốn gửi/set nội dung gì cho nhóm? Ví dụ: gửi nhóm đã chọn: tối nay họp 20h.";
+    }
+
+    const targetMessage = createMessageForTargetChat(message, target, payload);
+
+    if (isSendToGroup) {
+      await sendMessage(env, target.chat_id, payload);
+      return `Đã gửi vào nhóm: ${target.chat_title || target.chat_id}.`;
+    }
+
+    if (isSetGroup) {
+      const settingsText = normalizeText(payload).includes("thoi tiet") ? `cài gửi ${payload}` : payload;
+      const settingsReply = await handleSettingsCommand(env, targetMessage, settingsText);
+
+      return settingsReply || "Mình chỉ set được cấu hình bot đã hỗ trợ, ví dụ: set nhóm đã chọn thời tiết 6h HCM.";
+    }
+
+    const reminderReply = await handleReminderCommand(env, targetMessage, `lên lịch ${payload}`);
+
+    return [
+      `Đang thao tác cho nhóm: ${target.chat_title || target.chat_id}`,
+      reminderReply || "Mình chưa hiểu lịch cần tạo cho nhóm."
+    ].join("\n");
+  }
+
+  const selected = await getAdminSelectedChat(env, ownerUserId);
+  const selectedDraft = await getTargetDraftStatus(env, selected);
+
+  if (selectedDraft) {
+    const targetMessage = createMessageForTargetChat(message, selected, cleanText);
+    const reminderReply = await handleReminderCommand(env, targetMessage, cleanText);
+
+    if (reminderReply) {
+      return [
+        `Đang tiếp tục nháp lịch cho nhóm: ${selected.chat_title || selected.chat_id}`,
+        reminderReply
+      ].join("\n");
+    }
+  }
+
+  return null;
+}
+
 function buildMessageMetadata(message, eventName = "message.received") {
   const text = redactSensitiveText(getMessageText(message));
   const urlItems = extractMessageUrlItems(message);
@@ -2758,6 +3062,8 @@ function getHelpText() {
     "- Xem/tắt lịch: @Bot Thu Thập atess xem cài đặt / tắt thời tiết",
     "- Lên lịch nhắc việc: @Bot Thu Thập atess lên lịch mai 6h hẹn công ty nhậu",
     "- Xem lịch hẹn: @Bot Thu Thập atess xem lịch",
+    "- Owner nhắn riêng: xem nhóm / chọn nhóm 1 / gửi nhóm đã chọn: nội dung",
+    "- Owner nhắn riêng: set nhóm đã chọn thời tiết 6h HCM",
     "- Hỏi tự nhiên như: cái này là gì / nên làm sao / tóm tắt giúp",
     "- Gửi ảnh bản đồ kèm caption: Tâm Ga Bình Triệu, bán kính 2km, tìm nhà dưới 10tr",
     "- Hỏi: tìm phòng dưới 5 triệu / quận 7 / gần trường..."
@@ -2904,6 +3210,12 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
 
   if (!env.DB) {
     return getReplyText(message);
+  }
+
+  const adminTargetReply = await handleAdminTargetCommand(env, message, text);
+
+  if (adminTargetReply) {
+    return adminTargetReply;
   }
 
   const settingsReply = await handleSettingsCommand(env, message, text);

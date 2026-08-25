@@ -163,6 +163,17 @@ Bot cung co lich hen mot lan cho tung chat/group:
 ```
 
 Neu cau hen co ngu canh toi/nhau/an toi ma ghi 6h, bot se hieu la 18:00.
+Admin/owner co the dieu khien group tu chat rieng voi bot:
+
+```text
+xem nhom
+chon nhom 1
+gui nhom da chon: toi nay hop 20h
+set nhom da chon thoi tiet 6h HCM
+len lich nhom da chon mai 18h hop team
+```
+
+Tinh nang nay chi chay trong tin nhan rieng cua user nam trong `OWNER_ZALO_USER_IDS`.
 Moi lan bot goi Gemini, Worker se ghi usage vao D1 de dashboard xem so call, token va loi quota/429.
 Bot co them intent router: voi moi tin nhan khong phai link/lenh bao mat, bot doc tin moi,
 state cu va cac tin gan nhat de doan y dinh nhu weather, rental_search, context_summary,
