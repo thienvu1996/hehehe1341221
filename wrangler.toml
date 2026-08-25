@@ -9,3 +9,8 @@ enabled = true
 [[routes]]
 pattern = "bot.jean1331.io.vn"
 custom_domain = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "zalo-bot-db"
+database_id = "ea5bd724-63e3-4902-b555-df88f293a46b"
