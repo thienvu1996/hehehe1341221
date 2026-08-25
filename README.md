@@ -116,5 +116,18 @@ Vi du:
 @Bot Thu Thap atess hom nay co link nao?
 @Bot Thu Thap atess link nao loi?
 @Bot Thu Thap atess tim phong duoi 5 trieu
+@Bot Thu Thap atess tim nha duoi 10tr gan Ga Binh Trieu tren google
 @Bot Thu Thap atess help
 ```
+
+## Anh ban do va Google Search
+
+Bot co the nhan anh tu Zalo qua event `message.image.received`.
+Neu gui anh ban do, nen kem caption ro dieu kien:
+
+```text
+Tam Ga Binh Trieu, ban kinh 2km, tim nha duoi 10tr tren google
+```
+
+Bot se doc dia danh/vung khoanh trong anh bang Gemini Vision. Neu caption co yeu cau tim kiem, bot se thu dung Gemini Google Search de tim tren web.
+Neu Google Search het quota, bot van luu/phan tich anh nhung se bao chua search web duoc.

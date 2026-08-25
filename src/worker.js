@@ -1,6 +1,7 @@
 const API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_GEMINI_SEARCH_MODEL = "gemini-3.5-flash-lite";
 const MAX_ZALO_TEXT_LENGTH = 1900;
 const DEFAULT_BOT_DISPLAY_NAME = "Bot Thu Thap atess";
 
@@ -63,6 +64,10 @@ function extractUrls(text) {
     .filter(Boolean);
 }
 
+function getMessageText(message) {
+  return String(message?.text || message?.caption || "").trim();
+}
+
 function getCleanQuestion(text, botName = "") {
   let cleanText = String(text || "").trim();
   const names = [botName, DEFAULT_BOT_DISPLAY_NAME, "Bot Thu Thập atess"].filter(Boolean);
@@ -78,6 +83,9 @@ function isRentalQuestion(text) {
   const normalized = normalizeText(text);
 
   return (
+    normalized.includes("search") ||
+    normalized.includes("google") ||
+    normalized.includes("gg") ||
     normalized.includes("link") ||
     normalized.includes("nha") ||
     normalized.includes("phong") ||
@@ -89,8 +97,27 @@ function isRentalQuestion(text) {
     normalized.includes("help") ||
     normalized.includes("tim") ||
     normalized.includes("duoi") ||
+    normalized.includes("ban kinh") ||
+    normalized.includes("gan") ||
     normalized.includes("trieu") ||
+    normalized.includes("10tr") ||
     /\b\d+\s*tr\b/.test(normalized)
+  );
+}
+
+function wantsWebSearch(text) {
+  const normalized = normalizeText(text);
+
+  return (
+    normalized.includes("/search") ||
+    normalized.includes("search") ||
+    normalized.includes("google") ||
+    normalized.includes(" tren gg") ||
+    normalized.includes(" gg ") ||
+    normalized.includes("tim tren mang") ||
+    normalized.includes("tim tren web") ||
+    normalized.includes("tim nha") ||
+    normalized.includes("tim phong")
   );
 }
 
@@ -187,6 +214,131 @@ async function askGemini(env, prompt) {
   }
 
   return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
+}
+
+function parseInteractionText(data) {
+  if (data?.output_text) {
+    return String(data.output_text).trim();
+  }
+
+  const blocks = [];
+
+  for (const step of data?.steps || []) {
+    if (step.type === "model_output") {
+      for (const block of step.content || []) {
+        if (block.type === "text" && block.text) {
+          blocks.push(block.text);
+        }
+      }
+    }
+  }
+
+  return blocks.join("\n").trim();
+}
+
+function parseInteractionSources(data) {
+  const sources = [];
+
+  for (const step of data?.steps || []) {
+    if (step.type !== "model_output") {
+      continue;
+    }
+
+    for (const block of step.content || []) {
+      for (const annotation of block.annotations || []) {
+        if (annotation.type === "url_citation" && annotation.url) {
+          sources.push({
+            title: annotation.title || annotation.url,
+            url: annotation.url
+          });
+        }
+      }
+    }
+  }
+
+  return [...new Map(sources.map((source) => [source.url, source])).values()].slice(0, 3);
+}
+
+async function askGeminiInteraction(env, input, options = {}) {
+  if (!env.GEMINI_API_KEY) {
+    return { text: "", sources: [] };
+  }
+
+  const model = options.model || env.GEMINI_SEARCH_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_SEARCH_MODEL;
+  const payload = {
+    model,
+    input
+  };
+
+  if (options.tools) {
+    payload.tools = options.tools;
+  }
+
+  if (options.generationConfig) {
+    payload.generation_config = options.generationConfig;
+  }
+
+  const response = await fetch(`${GEMINI_API_BASE_URL}/interactions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": env.GEMINI_API_KEY
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15000)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(`Gemini interaction failed: ${JSON.stringify(data)}`);
+  }
+
+  return {
+    text: parseInteractionText(data),
+    sources: parseInteractionSources(data)
+  };
+}
+
+async function searchWeb(env, query) {
+  const prompt = `
+Ban la tro ly tim nha thue cho nhom Zalo.
+Hay tim web bang Google Search va tra loi ngan gon bang tieng Viet khong dau.
+Uu tien thong tin co link nguon. Neu cau hoi co gia, khu vuc, ban kinh, hay giu dung dieu kien.
+
+Cau hoi: ${query}
+`;
+  const result = await askGeminiInteraction(env, prompt, {
+    tools: [{ type: "google_search" }],
+    model: env.GEMINI_SEARCH_MODEL || DEFAULT_GEMINI_SEARCH_MODEL
+  });
+  const sourceText = result.sources.length
+    ? `\n\nNguon:\n${result.sources.map((source, index) => `${index + 1}. ${source.title}: ${source.url}`).join("\n")}`
+    : "";
+
+  return {
+    answer: limitText(`${result.text}${sourceText}`),
+    sources: result.sources
+  };
+}
+
+async function saveSearch(env, message, query, answer, sources) {
+  if (!env.DB) {
+    return;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO searches (chat_id, user_id, user_name, query, answer, sources_json)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      message.chat?.id || "",
+      message.from?.id || "",
+      message.from?.display_name || "",
+      query,
+      answer,
+      JSON.stringify(sources || [])
+    )
+    .run();
 }
 
 async function summarizeRentalLink(env, url, sourceText, urlInfo) {
@@ -362,7 +514,24 @@ async function answerQuestion(env, message, question) {
   }
 
   if (links.length === 0) {
-    return "Chua co link nao de tra loi. Hay gui link thue nha vao nhom truoc.";
+    try {
+      const result = await searchWeb(env, question);
+      await saveSearch(env, message, question, result.answer, result.sources);
+      return result.answer || "Chua tim duoc ket qua phu hop.";
+    } catch (error) {
+      console.error(error);
+      return "Chua co link nao de tra loi. Gemini Google Search dang loi/het quota, hay gui link thue nha vao nhom truoc.";
+    }
+  }
+
+  if (wantsWebSearch(question)) {
+    try {
+      const result = await searchWeb(env, question);
+      await saveSearch(env, message, question, result.answer, result.sources);
+      return result.answer || "Chua tim duoc ket qua phu hop.";
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   const context = links
@@ -394,7 +563,7 @@ ${context}
 }
 
 async function processTextMessage(env, message) {
-  const text = String(message.text || "").trim();
+  const text = getMessageText(message);
   const urls = extractUrls(text);
 
   await saveMessage(env, message);
@@ -434,6 +603,94 @@ async function processTextMessage(env, message) {
   }
 
   return getReplyText(message);
+}
+
+function getImageMimeType(url = "") {
+  const lowerUrl = url.toLowerCase();
+
+  if (lowerUrl.includes(".png")) {
+    return "image/png";
+  }
+
+  if (lowerUrl.includes(".webp")) {
+    return "image/webp";
+  }
+
+  return "image/jpeg";
+}
+
+async function analyzeImage(env, message) {
+  const photoUrl = message.photo;
+  const caption = getMessageText(message);
+
+  if (!photoUrl) {
+    return "Khong thay URL anh trong webhook.";
+  }
+
+  if (!env.GEMINI_API_KEY) {
+    return "Da nhan anh, nhung chua co GEMINI_API_KEY de nhan dien.";
+  }
+
+  const prompt = `
+Ban la tro ly thu thap thong tin thue nha tu anh nguoi dung gui trong nhom Zalo.
+Hay doc anh va caption. Neu la anh ban do, nhan dien cac dia danh thay duoc, vung duoc khoanh, diem trung tam neu co, va uoc luong khu vuc. Khong khang dinh ban kinh km chinh xac neu anh khong co ty le/du lieu toa do.
+Neu caption co yeu cau tim nha/phong/gia/ban kinh, hay tao them goi y truy van web ngan gon.
+Tra loi bang tieng Viet khong dau, ngan gon.
+
+Caption: ${caption}
+`;
+  const result = await askGeminiInteraction(
+    env,
+    [
+      { type: "text", text: prompt },
+      {
+        type: "image",
+        uri: photoUrl,
+        mime_type: getImageMimeType(photoUrl)
+      }
+    ],
+    {
+      model: env.GEMINI_IMAGE_MODEL || env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+      generationConfig: { thinking_level: "minimal" }
+    }
+  );
+  let answer = result.text || "Da nhan anh nhung chua phan tich duoc.";
+
+  if (wantsWebSearch(caption)) {
+    try {
+      const searchQuery = `${caption}\nKhu vuc/anh: ${answer}`;
+      const searchResult = await searchWeb(env, searchQuery);
+      answer = `${answer}\n\nKet qua web:\n${searchResult.answer}`;
+      await saveSearch(env, message, searchQuery, searchResult.answer, searchResult.sources);
+    } catch (error) {
+      console.error(error);
+      answer = `${answer}\n\nChua search web duoc, co the Gemini Google Search dang het quota.`;
+    }
+  }
+
+  if (env.DB) {
+    await env.DB.prepare(
+      `INSERT INTO images (chat_id, chat_type, user_id, user_name, message_id, photo_url, caption, analysis)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(chat_id, message_id) DO UPDATE SET
+         photo_url = excluded.photo_url,
+         caption = excluded.caption,
+         analysis = excluded.analysis`
+    )
+      .bind(
+        message.chat?.id || "",
+        message.chat?.chat_type || "",
+        message.from?.id || "",
+        message.from?.display_name || "",
+        message.message_id || null,
+        photoUrl,
+        caption,
+        answer
+      )
+      .run();
+  }
+
+  return limitText(answer);
 }
 
 async function callZaloApi(env, methodName, payload = {}) {
@@ -484,9 +741,11 @@ async function handleWebhook(request, env) {
 
   console.log("Received Zalo event:", JSON.stringify(body));
 
-  if (eventName === "message.text.received" && message?.chat?.id) {
+  if (["message.text.received", "message.image.received"].includes(eventName) && message?.chat?.id) {
     try {
-      await sendMessage(env, message.chat.id, await processTextMessage(env, message));
+      const reply =
+        eventName === "message.image.received" ? await analyzeImage(env, message) : await processTextMessage(env, message);
+      await sendMessage(env, message.chat.id, reply);
     } catch (error) {
       console.error(error);
     }
