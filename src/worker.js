@@ -197,6 +197,71 @@ function extractUrls(text) {
     .filter(Boolean);
 }
 
+function isLikelyMediaUrl(url, source = "") {
+  const lowerUrl = String(url || "").toLowerCase();
+  const lowerSource = String(source || "").toLowerCase();
+
+  return (
+    /\.(avif|gif|heic|jpeg|jpg|mp4|png|webp)(\?|#|$)/i.test(lowerUrl) ||
+    /(photo|image|thumbnail|thumb|avatar|sticker)/.test(lowerSource)
+  );
+}
+
+function collectUrlsDeep(value, path = "", depth = 0, output = []) {
+  if (!value || depth > 6) {
+    return output;
+  }
+
+  if (typeof value === "string") {
+    for (const url of extractUrls(value)) {
+      output.push({ url, source: path });
+    }
+
+    return output;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((child, index) => collectUrlsDeep(child, `${path}[${index}]`, depth + 1, output));
+    return output;
+  }
+
+  if (typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      collectUrlsDeep(child, path ? `${path}.${key}` : key, depth + 1, output);
+    }
+  }
+
+  return output;
+}
+
+function uniqueUrlItems(items) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const item of items) {
+    if (!item?.url || seen.has(item.url)) {
+      continue;
+    }
+
+    seen.add(item.url);
+    unique.push(item);
+  }
+
+  return unique;
+}
+
+function extractMessageUrlItems(message) {
+  const text = getMessageText(message);
+  const fromText = extractUrls(text).map((url) => ({ url, source: "text" }));
+  const deepItems = collectUrlsDeep(message, "message").filter((item) => !isLikelyMediaUrl(item.url, item.source));
+
+  return uniqueUrlItems([...fromText, ...deepItems]);
+}
+
+function extractMessageUrls(message) {
+  return extractMessageUrlItems(message).map((item) => item.url);
+}
+
 function findUrlDeep(value, path = "", depth = 0) {
   if (!value || depth > 5) {
     return null;
@@ -398,7 +463,8 @@ function answerDashboardKey(env, message) {
 
 function buildMessageMetadata(message, eventName = "message.received") {
   const text = redactSensitiveText(getMessageText(message));
-  const urls = extractUrls(text);
+  const urlItems = extractMessageUrlItems(message);
+  const urls = urlItems.map((item) => item.url);
   const imageInfo = extractImageUrl(message);
 
   return {
@@ -424,7 +490,11 @@ function buildMessageMetadata(message, eventName = "message.received") {
       text_length: text.length
     },
     extracted: {
-      urls
+      urls,
+      url_sources: urlItems.map((item) => ({
+        url: item.url,
+        source: item.source
+      }))
     },
     captured_at: new Date().toISOString()
   };
@@ -1233,7 +1303,7 @@ async function saveConversationState(env, message, route, question) {
   }
 }
 
-async function saveLink(env, message, url, urlInfo, summaryInfo) {
+async function saveLink(env, message, url, urlInfo, summaryInfo, sourceText = "") {
   await env.DB.prepare(
     `INSERT INTO links
       (chat_id, chat_type, user_id, user_name, message_id, url, source_text, title, description,
@@ -1259,7 +1329,7 @@ async function saveLink(env, message, url, urlInfo, summaryInfo) {
       message.from?.display_name || "",
       message.message_id || null,
       url,
-      redactSensitiveText(message.text || message.caption || ""),
+      redactSensitiveText(sourceText || message.text || message.caption || ""),
       urlInfo.title || "",
       urlInfo.description || "",
       redactSensitiveText(summaryInfo.summary || ""),
@@ -1907,7 +1977,11 @@ async function answerWithConversationRoute(env, message, question) {
 
 async function processTextMessage(env, message, eventName = "message.text.received") {
   const text = getMessageText(message);
-  const urls = extractUrls(text);
+  const urlItems = extractMessageUrlItems(message);
+  const urls = urlItems.map((item) => item.url);
+  const sourceText = [text, ...urlItems.filter((item) => !text.includes(item.url)).map((item) => item.url)]
+    .filter(Boolean)
+    .join("\n");
 
   await saveMessage(env, message, eventName);
 
@@ -1926,7 +2000,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
 
     for (const url of urls.slice(0, 5)) {
       const urlInfo = await fetchUrlInfo(url);
-      const summaryInfo = await summarizeRentalLink(env, message, url, text, urlInfo).catch((error) => {
+      const summaryInfo = await summarizeRentalLink(env, message, url, sourceText, urlInfo).catch((error) => {
         console.error(error);
         return {
           summary: urlInfo.title || urlInfo.description || "Da luu link, nhung chua tom tat duoc.",
@@ -1934,7 +2008,7 @@ async function processTextMessage(env, message, eventName = "message.text.receiv
           areaText: ""
         };
       });
-      await saveLink(env, message, url, urlInfo, summaryInfo);
+      await saveLink(env, message, url, urlInfo, summaryInfo, sourceText);
       savedLinks.push({ url, ...urlInfo, ...summaryInfo });
     }
 

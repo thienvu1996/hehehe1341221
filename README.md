@@ -111,6 +111,9 @@ va tu dong phan hoi lai tin nhan text dau vao.
 
 Bot tu dong luu cac link `http://` va `https://` trong group vao Cloudflare D1.
 Neu co `GEMINI_API_KEY`, bot se tom tat link bang model `gemini-3.1-flash-lite`.
+Bot chi luu duoc tin nhan ma Zalo webhook thuc su gui ve Worker. Trong group, nen tag bot
+hoac gui/forward link truc tiep cho bot neu tin cua nguoi khac khong trigger webhook.
+Extractor URL doc ca `message.text` va cac field link-preview/attachment trong payload, dong thoi bo qua thumbnail/anh preview.
 
 Vi du:
 
