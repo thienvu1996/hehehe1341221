@@ -77,7 +77,7 @@ async function handleWebhook(request, env) {
   }
 
   const body = await request.json().catch(() => null);
-  const event = body?.result;
+  const event = body?.result || body;
   const eventName = event?.event_name;
   const message = event?.message;
 

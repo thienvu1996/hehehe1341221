@@ -71,7 +71,7 @@ async function handleWebhook(req, res) {
     return res.status(403).json({ message: "Unauthorized" });
   }
 
-  const event = req.body?.result;
+  const event = req.body?.result || req.body;
   const eventName = event?.event_name;
   const message = event?.message;
 
