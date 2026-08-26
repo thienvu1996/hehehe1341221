@@ -2,6 +2,8 @@ import memoryWorker from "./worker-v2.js";
 
 const API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const DASHBOARD_SESSION_TTL_SECONDS = 30 * 60;
+const DASHBOARD_SESSION_IDLE_TTL_MS = DASHBOARD_SESSION_TTL_SECONDS * 1000;
+const DASHBOARD_AUTH_PATHS = new Set(["/admin/dashboard-data", "/admin/bot-profile"]);
 
 function json(data, status = 200, headers = {}) {
   return new Response(JSON.stringify(data), {
@@ -70,6 +72,57 @@ async function createDashboardSignature(secret, payload) {
   return base64UrlEncode(signature);
 }
 
+function parseD1Timestamp(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return Number.NaN;
+  }
+
+  const normalized = text.includes("T") ? text : `${text.replace(" ", "T")}Z`;
+  return Date.parse(normalized);
+}
+
+async function registerDashboardSession(env, nonce) {
+  if (!env.DB?.prepare || !nonce) {
+    return false;
+  }
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO dashboard_sessions (nonce, created_at, last_seen_at)
+       VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(nonce) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP`
+    )
+      .bind(nonce)
+      .run();
+    return true;
+  } catch (error) {
+    console.error("Failed to register dashboard session:", error);
+    return false;
+  }
+}
+
+async function touchDashboardSession(env, nonce) {
+  if (!env.DB?.prepare || !nonce) {
+    return false;
+  }
+
+  try {
+    await env.DB.prepare(
+      `UPDATE dashboard_sessions
+       SET last_seen_at = CURRENT_TIMESTAMP
+       WHERE nonce = ?`
+    )
+      .bind(nonce)
+      .run();
+    return true;
+  } catch (error) {
+    console.error("Failed to touch dashboard session:", error);
+    return false;
+  }
+}
+
 async function createDashboardSessionToken(env) {
   const secret = getDashboardMasterSecret(env);
 
@@ -81,6 +134,8 @@ async function createDashboardSessionToken(env) {
   const nonce = crypto.randomUUID();
   const payload = `v1.${expiresAt}.${nonce}`;
   const signature = await createDashboardSignature(secret, payload);
+
+  await registerDashboardSession(env, nonce);
 
   return {
     token: `${payload}.${signature}`,
@@ -97,15 +152,56 @@ async function verifyDashboardSessionToken(env, token) {
   }
 
   const expiresAt = Number(parts[1]);
+  const nonce = parts[2];
 
-  if (!Number.isFinite(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+  if (!Number.isFinite(expiresAt) || !nonce) {
     return false;
   }
 
   const payload = parts.slice(0, 3).join(".");
   const expectedSignature = await createDashboardSignature(secret, payload);
 
-  return constantTimeEqual(parts[3], expectedSignature);
+  if (!constantTimeEqual(parts[3], expectedSignature)) {
+    return false;
+  }
+
+  const now = Date.now();
+
+  if (env.DB?.prepare) {
+    try {
+      const row = await env.DB.prepare(
+        `SELECT nonce, last_seen_at
+         FROM dashboard_sessions
+         WHERE nonce = ?
+         LIMIT 1`
+      )
+        .bind(nonce)
+        .first();
+
+      if (row) {
+        const lastSeenAt = parseD1Timestamp(row.last_seen_at);
+
+        if (!Number.isFinite(lastSeenAt) || now - lastSeenAt > DASHBOARD_SESSION_IDLE_TTL_MS) {
+          await env.DB.prepare("DELETE FROM dashboard_sessions WHERE nonce = ?").bind(nonce).run().catch(() => {});
+          return false;
+        }
+
+        await touchDashboardSession(env, nonce);
+        return true;
+      }
+
+      if (expiresAt * 1000 <= now) {
+        return false;
+      }
+
+      await registerDashboardSession(env, nonce);
+      return true;
+    } catch (error) {
+      console.error("Failed to verify sliding dashboard session:", error);
+    }
+  }
+
+  return expiresAt * 1000 > now;
 }
 
 function normalizeText(text) {
@@ -214,12 +310,13 @@ async function handleDashboardKeyWebhook(request, env) {
       reply = "Worker chưa có secret để tạo phiên dashboard.";
     } else {
       reply = [
-        "Dashboard key tạm thời (30 phút):",
+        "Dashboard key tạm thời (30 phút để mở dashboard):",
         session.token,
         "",
         "Mở dashboard:",
         "https://dashboard.jean1331.io.vn",
         "Dán key tạm thời ở trên vào ô Dashboard key.",
+        "Khi dashboard còn mở, session sẽ tự được giữ. Rời/đóng trang quá 30 phút thì session hết hạn.",
         "",
         "Nếu domain chính chưa vào được, dùng:",
         "https://hehehe1341221-dashboard.vuthien616.workers.dev"
@@ -245,14 +342,44 @@ async function handleTemporaryDashboardSession(request, env) {
     return dashboardJson(request, { message: "Session expired" }, 403);
   }
 
-  const expiresAt = Number(token.split(".")[1]);
-
   return dashboardJson(request, {
     ok: true,
     session_token: token,
-    expires_at: expiresAt,
-    ttl_seconds: Math.max(0, expiresAt - Math.floor(Date.now() / 1000))
+    expires_at: Math.floor(Date.now() / 1000) + DASHBOARD_SESSION_TTL_SECONDS,
+    ttl_seconds: DASHBOARD_SESSION_TTL_SECONDS,
+    sliding: true
   });
+}
+
+async function forwardTemporaryDashboardRequest(request, env, ctx) {
+  const url = new URL(request.url);
+
+  if (!DASHBOARD_AUTH_PATHS.has(url.pathname)) {
+    return null;
+  }
+
+  const sessionToken = request.headers.get("x-dashboard-token") || "";
+
+  if (!sessionToken.startsWith("v1.")) {
+    return null;
+  }
+
+  if (!(await verifyDashboardSessionToken(env, sessionToken))) {
+    return dashboardJson(request, { message: "Session expired" }, 403);
+  }
+
+  const masterSecret = getDashboardMasterSecret(env);
+
+  if (!masterSecret) {
+    return dashboardJson(request, { message: "Dashboard secret is not configured" }, 500);
+  }
+
+  const headers = new Headers(request.headers);
+  headers.delete("x-dashboard-token");
+  headers.set("x-bot-api-secret-token", masterSecret);
+
+  const forwardedRequest = new Request(request, { headers });
+  return memoryWorker.fetch(forwardedRequest, env, ctx);
 }
 
 export { createDashboardSessionToken, verifyDashboardSessionToken, wantsDashboardKey };
@@ -266,6 +393,14 @@ export default {
 
       if (temporarySessionResponse) {
         return temporarySessionResponse;
+      }
+    }
+
+    if (DASHBOARD_AUTH_PATHS.has(url.pathname)) {
+      const temporaryDashboardResponse = await forwardTemporaryDashboardRequest(request, env, ctx);
+
+      if (temporaryDashboardResponse) {
+        return temporaryDashboardResponse;
       }
     }
 
