@@ -21,11 +21,20 @@ async function proxyBotApi(request, url) {
 
   const headers = new Headers(request.headers);
   headers.delete("host");
+  headers.delete("content-length");
+
+  // Buffer non-GET bodies before forwarding. Passing request.body directly can
+  // leave a locked/streaming body between Workers and surface as a Cloudflare
+  // runtime HTTP 500 for browser POST requests (for example dashboard login).
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
 
   return fetch(target.toString(), {
     method: request.method,
     headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+    body,
     redirect: "manual"
   });
 }
@@ -35,7 +44,21 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
-      return proxyBotApi(request, url);
+      try {
+        return await proxyBotApi(request, url);
+      } catch (error) {
+        console.error("Dashboard API proxy failed:", error);
+        return new Response(
+          JSON.stringify({
+            message: "Dashboard API proxy failed",
+            error: String(error?.message || error)
+          }),
+          {
+            status: 502,
+            headers: { "Content-Type": "application/json; charset=utf-8" }
+          }
+        );
+      }
     }
 
     return env.ASSETS.fetch(request);
