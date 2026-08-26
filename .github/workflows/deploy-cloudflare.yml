@@ -16,7 +16,7 @@ permissions:
 jobs:
   test-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -48,7 +48,19 @@ jobs:
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply zalo-bot-db --remote
 
-      - name: Deploy Worker
+      - name: Deploy bot Worker
+        run: npx wrangler deploy
+
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm run build
+
+      - name: Deploy dashboard Worker
+        working-directory: dashboard
         run: npx wrangler deploy
 
       - name: Smoke check public endpoints
@@ -56,27 +68,31 @@ jobs:
         run: |
           set -u
           BASE="https://bot.jean1331.io.vn"
+          DASHBOARD="https://dashboard.jean1331.io.vn"
 
           check_code() {
             local method="$1"
-            local path="$2"
-            local expected="$3"
+            local base="$2"
+            local path="$3"
+            local expected="$4"
             local body_file
             body_file="$(mktemp)"
             local code
-            code=$(curl -sS -X "$method" -o "$body_file" -w "%{http_code}" "$BASE$path" || true)
-            echo "$method $path -> HTTP $code"
-            cat "$body_file" || true
+            code=$(curl -sS -X "$method" -o "$body_file" -w "%{http_code}" "$base$path" || true)
+            echo "$method $base$path -> HTTP $code"
+            head -c 800 "$body_file" || true
             echo
             rm -f "$body_file"
             if [ "$code" != "$expected" ]; then
-              echo "Unexpected status for $path: expected $expected, got $code"
+              echo "Unexpected status for $base$path: expected $expected, got $code"
               exit 1
             fi
           }
 
-          check_code GET / 200
-          check_code GET /health 200
-          # If the runtime secrets exist, unauthenticated admin calls should be 403, not 500.
-          check_code POST /admin/test-webhook 403
-          check_code POST /admin/dashboard-session 403
+          check_code GET "$BASE" / 200
+          check_code GET "$BASE" /health 200
+          # Runtime secrets should exist: unauthenticated admin calls must be 403, never 500.
+          check_code POST "$BASE" /admin/test-webhook 403
+          check_code POST "$BASE" /admin/dashboard-session 403
+          # Dashboard static Worker must be reachable after every deploy.
+          check_code GET "$DASHBOARD" / 200
