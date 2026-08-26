@@ -2,13 +2,23 @@ const BOT_API_ORIGIN = "https://bot.jean1331.io.vn";
 const ALLOWED_API_PATHS = new Set([
   "/admin/dashboard-session",
   "/admin/dashboard-data",
-  "/admin/bot-profile"
+  "/admin/bot-profile",
+  "/admin/connections"
 ]);
+const ALLOWED_API_PREFIXES = [
+  "/admin/zalo-connections",
+  "/admin/ai-providers",
+  "/admin/ai-api-keys"
+];
+
+function isAllowedApiPath(path) {
+  return ALLOWED_API_PATHS.has(path) || ALLOWED_API_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
 
 async function proxyBotApi(request, url) {
   const botPath = url.pathname.replace(/^\/api/, "") || "/";
 
-  if (!ALLOWED_API_PATHS.has(botPath)) {
+  if (!isAllowedApiPath(botPath)) {
     return new Response(JSON.stringify({ message: "Not Found" }), {
       status: 404,
       headers: { "Content-Type": "application/json; charset=utf-8" }
@@ -23,9 +33,6 @@ async function proxyBotApi(request, url) {
   headers.delete("host");
   headers.delete("content-length");
 
-  // Buffer non-GET bodies before forwarding. Passing request.body directly can
-  // leave a locked/streaming body between Workers and surface as a Cloudflare
-  // runtime HTTP 500 for browser POST requests (for example dashboard login).
   const body =
     request.method === "GET" || request.method === "HEAD"
       ? undefined
