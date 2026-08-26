@@ -60,6 +60,24 @@ function memoryScopePredicate(connectionId, alias = "memories") {
   return `(${scopePredicate(`${alias}.chat_id`, connectionId)} OR ${scopePredicate(`${alias}.user_id`, connectionId)})`;
 }
 
+function rewriteGlobalMemorySql(sql, connectionId) {
+  if (!/chat_memories/i.test(String(sql || ""))) return String(sql || "");
+  const predicate = memoryScopePredicate(connectionId, "chat_memories");
+  return String(sql || "").replace(/\bscope\s*=\s*'global'/gi, `(scope = 'global' AND ${predicate})`);
+}
+
+function rewriteRuntimeProviderSql(sql, allowedProviderIds) {
+  if (allowedProviderIds == null || allowedProviderIds === "*") return String(sql || "");
+  const ids = Array.isArray(allowedProviderIds) ? allowedProviderIds.filter(Boolean).map(String) : [];
+  const clause = ids.length
+    ? `AND id IN (${ids.map(quoteSqlLiteral).join(",")})`
+    : "AND 1 = 0";
+  return String(sql || "").replace(
+    /FROM ai_providers WHERE enabled = 1/gi,
+    `FROM ai_providers WHERE enabled = 1 ${clause}`
+  );
+}
+
 function rewriteScheduledSql(sql, connectionId) {
   let text = rewriteProfileSql(sql, connectionId);
   const reminderPredicate = scopePredicate("chat_id", connectionId);
@@ -131,11 +149,32 @@ function rewriteDashboardSql(sql, connectionId) {
   return text;
 }
 
+function scopeChatMemoryBindValues(values, sql, connectionId, identities) {
+  if (normalizeConnectionId(connectionId) === "main" || !/INSERT\s+INTO\s+chat_memories/i.test(sql)) return values;
+  const output = [...values];
+  const prefix = connectionPrefix(connectionId);
+  if (output.length > 2) {
+    output[2] = output[2]
+      ? scopeIdentity(output[2], connectionId, identities)
+      : `${prefix}__global__`;
+  }
+  if (output.length > 5) {
+    output[5] = output[5]
+      ? scopeIdentity(output[5], connectionId, identities)
+      : `${prefix}__global__`;
+  }
+  if (output.length > 14 && typeof output[14] === "string") {
+    output[14] = scopeIdentity(output[14], connectionId, identities);
+  }
+  return output;
+}
+
 function wrapStatement(statement, context) {
-  const { connectionId, identities } = context;
+  const { connectionId, identities, sql } = context;
   return {
     bind(...values) {
-      const scoped = values.map((value) => scopeIdentity(value, connectionId, identities));
+      let scoped = values.map((value) => scopeIdentity(value, connectionId, identities));
+      scoped = scopeChatMemoryBindValues(scoped, sql, connectionId, identities);
       return wrapStatement(statement.bind(...scoped), context);
     },
     async all(...args) {
@@ -161,7 +200,8 @@ function createScopedDb(db, {
   chatId = "",
   userId = "",
   messageId = "",
-  mode = "request"
+  mode = "request",
+  allowedProviderIds = null
 } = {}) {
   if (!db?.prepare) return db;
   const id = normalizeConnectionId(connectionId);
@@ -172,9 +212,11 @@ function createScopedDb(db, {
       if (prop === "prepare") {
         return (sql) => {
           let rewritten = rewriteProfileSql(sql, id);
+          rewritten = rewriteGlobalMemorySql(rewritten, id);
+          rewritten = rewriteRuntimeProviderSql(rewritten, allowedProviderIds);
           if (mode === "dashboard") rewritten = rewriteDashboardSql(rewritten, id);
           if (mode === "scheduled") rewritten = rewriteScheduledSql(rewritten, id);
-          return wrapStatement(target.prepare(rewritten), { connectionId: id, identities });
+          return wrapStatement(target.prepare(rewritten), { connectionId: id, identities, sql: rewritten });
         };
       }
       const value = target[prop];
@@ -189,7 +231,9 @@ export {
   createScopedDb,
   normalizeConnectionId,
   rewriteDashboardSql,
+  rewriteGlobalMemorySql,
   rewriteProfileSql,
+  rewriteRuntimeProviderSql,
   rewriteScheduledSql,
   scopeIdentity,
   scopePredicate,
