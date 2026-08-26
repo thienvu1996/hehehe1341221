@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AdminNav } from "../components/admin-nav";
 import { SessionExpiryGuard } from "../components/session-expiry-guard";
 import "./globals.css";
 
@@ -16,6 +17,7 @@ export default function RootLayout({
     <html lang="vi">
       <body>
         <SessionExpiryGuard />
+        <AdminNav />
         {children}
       </body>
     </html>
