@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, LayoutDashboard } from "lucide-react";
+import { Bot, LayoutDashboard, MessageCircleMore } from "lucide-react";
 import { useEffect, useState } from "react";
 
 const linkStyle = (active: boolean): React.CSSProperties => ({
@@ -24,6 +24,10 @@ type Connection = {
   display_name: string;
   enabled: number | boolean;
 };
+
+function withConnection(path: string, connectionId: string) {
+  return connectionId === "main" ? path : `${path}?connection_id=${encodeURIComponent(connectionId)}`;
+}
 
 export function AdminNav() {
   const pathname = usePathname();
@@ -52,14 +56,15 @@ export function AdminNav() {
 
   const openBot = (connectionId: string) => {
     setSelected(connectionId);
-    const target = connectionId === "main" ? "/" : `/?connection_id=${encodeURIComponent(connectionId)}`;
-    window.location.href = target;
+    const basePath = pathname.startsWith("/chat") ? "/chat" : "/";
+    window.location.href = withConnection(basePath, connectionId);
   };
 
   return (
     <div style={{ position: "sticky", top: 0, zIndex: 50, display: "flex", justifyContent: "center", background: "rgba(2,6,23,.88)", backdropFilter: "blur(14px)", borderBottom: "1px solid rgba(148,163,184,.12)" }}>
       <nav style={{ width: "100%", maxWidth: 1180, padding: "9px 18px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <Link href={selected === "main" ? "/" : `/?connection_id=${encodeURIComponent(selected)}`} style={linkStyle(pathname === "/")}><LayoutDashboard size={15} /> Dashboard</Link>
+        <Link href={withConnection("/", selected)} style={linkStyle(pathname === "/")}><LayoutDashboard size={15} /> Dashboard</Link>
+        <Link href={withConnection("/chat", selected)} style={linkStyle(pathname.startsWith("/chat"))}><MessageCircleMore size={15} /> Chat tổng hợp</Link>
         <Link href="/connections" style={linkStyle(pathname.startsWith("/connections"))}><Bot size={15} /> Kết nối Zalo & AI</Link>
         {connections.length ? (
           <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 7, color: "#94a3b8", fontSize: 12, fontWeight: 700 }}>
