@@ -1,0 +1,198 @@
+const BOT_SCOPE_PREFIX = "@bot:";
+
+function normalizeConnectionId(value = "main") {
+  const clean = String(value || "main")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return clean || "main";
+}
+
+function connectionPrefix(connectionId = "main") {
+  const id = normalizeConnectionId(connectionId);
+  return id === "main" ? "" : `${BOT_SCOPE_PREFIX}${id}:`;
+}
+
+function scopeIdentity(value, connectionId, identities = []) {
+  const prefix = connectionPrefix(connectionId);
+  if (!prefix || typeof value !== "string" || value.startsWith(BOT_SCOPE_PREFIX)) return value;
+  const wanted = identities.filter(Boolean).map((item) => String(item));
+  return wanted.includes(value) ? `${prefix}${value}` : value;
+}
+
+function unscopeValue(value, connectionId) {
+  const prefix = connectionPrefix(connectionId);
+  if (!prefix || typeof value !== "string") return value;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function unscopeRow(row, connectionId) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+  const output = { ...row };
+  for (const key of ["chat_id", "user_id", "message_id", "source_message_id"]) {
+    if (typeof output[key] === "string") output[key] = unscopeValue(output[key], connectionId);
+  }
+  return output;
+}
+
+function quoteSqlLiteral(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function rewriteProfileSql(sql, connectionId) {
+  const id = normalizeConnectionId(connectionId);
+  if (id === "main") return String(sql || "");
+  const literal = quoteSqlLiteral(id);
+  return String(sql || "")
+    .replace(/\bid\s*=\s*'default'/gi, `id = ${literal}`)
+    .replace(/VALUES\s*\(\s*'default'\s*,/gi, `VALUES (${literal},`);
+}
+
+function scopePredicate(column, connectionId) {
+  const id = normalizeConnectionId(connectionId);
+  if (id === "main") return `(${column} NOT LIKE '${BOT_SCOPE_PREFIX}%')`;
+  return `(${column} LIKE ${quoteSqlLiteral(`${connectionPrefix(id)}%`)})`;
+}
+
+function memoryScopePredicate(connectionId, alias = "memories") {
+  return `(${scopePredicate(`${alias}.chat_id`, connectionId)} OR ${scopePredicate(`${alias}.user_id`, connectionId)})`;
+}
+
+function rewriteScheduledSql(sql, connectionId) {
+  let text = rewriteProfileSql(sql, connectionId);
+  const reminderPredicate = scopePredicate("chat_id", connectionId);
+  const settingsPredicate = scopePredicate("chat_id", connectionId);
+
+  text = text.replace(
+    /FROM reminders\s+WHERE status = 'pending' AND due_at_utc <= \?/gi,
+    `FROM reminders\n       WHERE status = 'pending' AND due_at_utc <= ? AND ${reminderPredicate}`
+  );
+  text = text.replace(
+    /FROM chat_settings\s+WHERE weather_enabled = 1/gi,
+    `FROM chat_settings\n       WHERE weather_enabled = 1 AND ${settingsPredicate}`
+  );
+  return text;
+}
+
+function rewriteDashboardSql(sql, connectionId) {
+  let text = rewriteProfileSql(sql, connectionId);
+  const simpleTables = ["messages", "links", "searches", "images"];
+
+  for (const table of simpleTables) {
+    const pred = scopePredicate("chat_id", connectionId);
+    const countPattern = new RegExp(`SELECT COUNT\\(\\*\\) AS total FROM ${table}(?!\\s+WHERE)`, "gi");
+    text = text.replace(countPattern, `SELECT COUNT(*) AS total FROM ${table} WHERE ${pred}`);
+    const recentPattern = new RegExp(`FROM ${table}(\\s+)ORDER BY`, "gi");
+    text = text.replace(recentPattern, `FROM ${table}\n       WHERE ${pred}$1ORDER BY`);
+  }
+
+  const aiPred = scopePredicate("chat_id", connectionId);
+  text = text.replace(
+    /SELECT COUNT\(\*\) AS total FROM ai_usage(?!\s+WHERE)/gi,
+    `SELECT COUNT(*) AS total FROM ai_usage WHERE ${aiPred}`
+  );
+  text = text.replace(/FROM ai_usage(\s+)ORDER BY/gi, `FROM ai_usage\n       WHERE ${aiPred}$1ORDER BY`);
+  if (/FROM ai_usage\s*$/i.test(text) && !/FROM ai_usage\s+WHERE/i.test(text)) {
+    text = text.replace(/FROM ai_usage\s*$/i, `FROM ai_usage\n       WHERE ${aiPred}`);
+  }
+
+  const settingsPred = scopePredicate("settings.chat_id", connectionId);
+  text = text.replace(
+    /(LEFT JOIN chat_aliases AS alias ON alias\.chat_id = settings\.chat_id)(\s+ORDER BY)/gi,
+    `$1\n       WHERE ${settingsPred}$2`
+  );
+  text = text.replace(
+    /SELECT COUNT\(\*\) AS total FROM chat_settings(?!\s+WHERE)/gi,
+    `SELECT COUNT(*) AS total FROM chat_settings WHERE ${scopePredicate("chat_id", connectionId)}`
+  );
+
+  const remindersPred = scopePredicate("reminders.chat_id", connectionId);
+  text = text.replace(
+    /(LEFT JOIN chat_aliases AS alias ON alias\.chat_id = reminders\.chat_id)(\s+ORDER BY)/gi,
+    `$1\n       WHERE ${remindersPred}$2`
+  );
+  text = text.replace(
+    /SELECT COUNT\(\*\) AS total FROM reminders(?!\s+WHERE)/gi,
+    `SELECT COUNT(*) AS total FROM reminders WHERE ${scopePredicate("chat_id", connectionId)}`
+  );
+
+  const memoriesPred = memoryScopePredicate(connectionId, "memories");
+  text = text.replace(
+    /WHERE memories\.expires_at IS NULL OR datetime\(memories\.expires_at\) > datetime\('now'\)/gi,
+    `WHERE ${memoriesPred} AND (memories.expires_at IS NULL OR datetime(memories.expires_at) > datetime('now'))`
+  );
+  text = text.replace(
+    /SELECT COUNT\(\*\) AS total FROM chat_memories(?!\s+WHERE)/gi,
+    `SELECT COUNT(*) AS total FROM chat_memories WHERE ${memoryScopePredicate(connectionId, "chat_memories")}`
+  );
+
+  return text;
+}
+
+function wrapStatement(statement, context) {
+  const { connectionId, identities } = context;
+  return {
+    bind(...values) {
+      const scoped = values.map((value) => scopeIdentity(value, connectionId, identities));
+      return wrapStatement(statement.bind(...scoped), context);
+    },
+    async all(...args) {
+      const result = await statement.all(...args);
+      if (!result || !Array.isArray(result.results)) return result;
+      return { ...result, results: result.results.map((row) => unscopeRow(row, connectionId)) };
+    },
+    async first(...args) {
+      const result = await statement.first(...args);
+      return result && typeof result === "object" ? unscopeRow(result, connectionId) : result;
+    },
+    async run(...args) {
+      return statement.run(...args);
+    },
+    async raw(...args) {
+      return statement.raw(...args);
+    }
+  };
+}
+
+function createScopedDb(db, {
+  connectionId = "main",
+  chatId = "",
+  userId = "",
+  messageId = "",
+  mode = "request"
+} = {}) {
+  if (!db?.prepare) return db;
+  const id = normalizeConnectionId(connectionId);
+  const identities = [chatId, userId, messageId].filter(Boolean).map(String);
+
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (sql) => {
+          let rewritten = rewriteProfileSql(sql, id);
+          if (mode === "dashboard") rewritten = rewriteDashboardSql(rewritten, id);
+          if (mode === "scheduled") rewritten = rewriteScheduledSql(rewritten, id);
+          return wrapStatement(target.prepare(rewritten), { connectionId: id, identities });
+        };
+      }
+      const value = target[prop];
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+}
+
+export {
+  BOT_SCOPE_PREFIX,
+  connectionPrefix,
+  createScopedDb,
+  normalizeConnectionId,
+  rewriteDashboardSql,
+  rewriteProfileSql,
+  rewriteScheduledSql,
+  scopeIdentity,
+  scopePredicate,
+  unscopeRow,
+  unscopeValue
+};
