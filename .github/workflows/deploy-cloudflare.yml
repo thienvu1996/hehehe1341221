@@ -50,3 +50,33 @@ jobs:
 
       - name: Deploy Worker
         run: npx wrangler deploy
+
+      - name: Smoke check public endpoints
+        shell: bash
+        run: |
+          set -u
+          BASE="https://bot.jean1331.io.vn"
+
+          check_code() {
+            local method="$1"
+            local path="$2"
+            local expected="$3"
+            local body_file
+            body_file="$(mktemp)"
+            local code
+            code=$(curl -sS -X "$method" -o "$body_file" -w "%{http_code}" "$BASE$path" || true)
+            echo "$method $path -> HTTP $code"
+            cat "$body_file" || true
+            echo
+            rm -f "$body_file"
+            if [ "$code" != "$expected" ]; then
+              echo "Unexpected status for $path: expected $expected, got $code"
+              exit 1
+            fi
+          }
+
+          check_code GET / 200
+          check_code GET /health 200
+          # If the runtime secrets exist, unauthenticated admin calls should be 403, not 500.
+          check_code POST /admin/test-webhook 403
+          check_code POST /admin/dashboard-session 403
