@@ -1,18 +1,6 @@
-CREATE TABLE IF NOT EXISTS zalo_connections (
-  id TEXT PRIMARY KEY,
-  display_name TEXT NOT NULL DEFAULT '',
-  enabled INTEGER NOT NULL DEFAULT 1,
-  token_cipher TEXT NOT NULL DEFAULT '',
-  webhook_secret_cipher TEXT NOT NULL DEFAULT '',
-  owner_ids TEXT NOT NULL DEFAULT '',
-  webhook_path TEXT NOT NULL DEFAULT '',
-  source TEXT NOT NULL DEFAULT 'dashboard',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_zalo_connections_enabled
-  ON zalo_connections(enabled, updated_at DESC);
+-- AI provider / API-key storage.
+-- Zalo connection storage is created by 0018_zalo_connections.sql and then
+-- normalized to the current schema by 0019_normalize_zalo_connections.sql.
 
 CREATE TABLE IF NOT EXISTS ai_providers (
   id TEXT PRIMARY KEY,
