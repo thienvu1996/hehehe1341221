@@ -1,10 +1,17 @@
 name = "hehehe1341221"
-main = "src/worker-v6.js"
+main = "src/worker-v7.js"
 compatibility_date = "2026-08-25"
 workers_dev = true
 
 [observability]
 enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
 
 [triggers]
 crons = ["*/15 * * * *"]
