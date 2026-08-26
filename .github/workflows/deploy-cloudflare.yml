@@ -57,6 +57,8 @@ jobs:
 
       - name: Build dashboard
         working-directory: dashboard
+        env:
+          NEXT_PUBLIC_BOT_API_URL: /api
         run: npm run build
 
       - name: Deploy dashboard Worker
@@ -96,3 +98,5 @@ jobs:
           check_code POST "$BASE" /admin/dashboard-session 403
           # Dashboard static Worker must be reachable after every deploy.
           check_code GET "$DASHBOARD" / 200
+          # Same-origin dashboard API proxy must reach the bot Worker.
+          check_code POST "$DASHBOARD" /api/admin/dashboard-session 403
