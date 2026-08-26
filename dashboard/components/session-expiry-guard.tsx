@@ -4,36 +4,15 @@ import { useEffect } from "react";
 
 const SESSION_KEY = "dashboardSession";
 const LEGACY_TOKEN_KEY = "dashboardToken";
-
-function getSessionExpiryMs(token: string) {
-  const parts = String(token || "").split(".");
-
-  if (parts.length < 2 || parts[0] !== "v1") {
-    return null;
-  }
-
-  const expiresAtSeconds = Number(parts[1]);
-
-  return Number.isFinite(expiresAtSeconds) ? expiresAtSeconds * 1000 : null;
-}
+const API_BASE_URL = process.env.NEXT_PUBLIC_BOT_API_URL || "https://bot.jean1331.io.vn";
+const KEEPALIVE_INTERVAL_MS = 2 * 60 * 1000;
 
 export function SessionExpiryGuard() {
   useEffect(() => {
     let isReloading = false;
+    let keepAliveRunning = false;
 
-    const clearExpiredSession = () => {
-      const token = sessionStorage.getItem(SESSION_KEY) || "";
-
-      if (!token) {
-        return;
-      }
-
-      const expiresAt = getSessionExpiryMs(token);
-
-      if (expiresAt && Date.now() < expiresAt) {
-        return;
-      }
-
+    const clearSessionAndReload = () => {
       sessionStorage.removeItem(SESSION_KEY);
       localStorage.removeItem(LEGACY_TOKEN_KEY);
 
@@ -43,21 +22,61 @@ export function SessionExpiryGuard() {
       }
     };
 
-    clearExpiredSession();
+    const keepSessionAlive = async () => {
+      if (keepAliveRunning) {
+        return;
+      }
 
-    const intervalId = window.setInterval(clearExpiredSession, 1000);
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        clearExpiredSession();
+      const token = sessionStorage.getItem(SESSION_KEY) || "";
+
+      if (!token) {
+        return;
+      }
+
+      keepAliveRunning = true;
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/admin/dashboard-session`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ token }),
+          cache: "no-store"
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          clearSessionAndReload();
+        }
+      } catch {
+        // Lỗi mạng tạm thời không tự đăng xuất; lần keepalive sau sẽ thử lại.
+      } finally {
+        keepAliveRunning = false;
       }
     };
 
-    window.addEventListener("focus", clearExpiredSession);
+    void keepSessionAlive();
+
+    const intervalId = window.setInterval(() => {
+      void keepSessionAlive();
+    }, KEEPALIVE_INTERVAL_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void keepSessionAlive();
+      }
+    };
+
+    const handleFocus = () => {
+      void keepSessionAlive();
+    };
+
+    window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", clearExpiredSession);
+      window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
