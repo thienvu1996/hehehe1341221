@@ -100,3 +100,20 @@ jobs:
           check_code GET "$DASHBOARD" / 200
           # Same-origin dashboard API proxy must reach the bot Worker.
           check_code POST "$DASHBOARD" /api/admin/dashboard-session 403
+
+          # Exercise the real browser login shape with a JSON request body. This
+          # catches request-body streaming/proxy regressions that can surface as HTTP 500.
+          body_file="$(mktemp)"
+          code=$(curl -sS -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"token":"v1.invalid.invalid.invalid"}' \
+            -o "$body_file" -w "%{http_code}" \
+            "$DASHBOARD/api/admin/dashboard-session" || true)
+          echo "POST JSON $DASHBOARD/api/admin/dashboard-session -> HTTP $code"
+          head -c 800 "$body_file" || true
+          echo
+          rm -f "$body_file"
+          if [ "$code" != "403" ]; then
+            echo "Dashboard JSON proxy expected 403, got $code"
+            exit 1
+          fi
