@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SessionExpiryGuard } from "../components/session-expiry-guard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +14,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="vi">
-      <body>{children}</body>
+      <body>
+        <SessionExpiryGuard />
+        {children}
+      </body>
     </html>
   );
 }
