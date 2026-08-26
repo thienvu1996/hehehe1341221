@@ -3,16 +3,28 @@ const ALLOWED_API_PATHS = new Set([
   "/admin/dashboard-session",
   "/admin/dashboard-data",
   "/admin/bot-profile",
-  "/admin/connections"
+  "/admin/connections",
+  "/admin/ai-permissions"
 ]);
 const ALLOWED_API_PREFIXES = [
   "/admin/zalo-connections",
   "/admin/ai-providers",
-  "/admin/ai-api-keys"
+  "/admin/ai-api-keys",
+  "/admin/ai-permissions"
 ];
 
 function isAllowedApiPath(path) {
   return ALLOWED_API_PATHS.has(path) || ALLOWED_API_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function getRefererConnectionId(request) {
+  const referer = request.headers.get("referer") || "";
+  if (!referer) return "";
+  try {
+    return new URL(referer).searchParams.get("connection_id") || "";
+  } catch {
+    return "";
+  }
 }
 
 async function proxyBotApi(request, url) {
@@ -28,6 +40,14 @@ async function proxyBotApi(request, url) {
   const target = new URL(BOT_API_ORIGIN);
   target.pathname = botPath;
   target.search = url.search;
+
+  if (
+    (botPath === "/admin/dashboard-data" || botPath === "/admin/bot-profile") &&
+    !target.searchParams.has("connection_id")
+  ) {
+    const connectionId = getRefererConnectionId(request);
+    if (connectionId) target.searchParams.set("connection_id", connectionId);
+  }
 
   const headers = new Headers(request.headers);
   headers.delete("host");
