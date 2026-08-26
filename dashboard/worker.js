@@ -4,7 +4,8 @@ const ALLOWED_API_PATHS = new Set([
   "/admin/dashboard-data",
   "/admin/bot-profile",
   "/admin/connections",
-  "/admin/ai-permissions"
+  "/admin/ai-permissions",
+  "/admin/chat-summary"
 ]);
 const ALLOWED_API_PREFIXES = [
   "/admin/zalo-connections",
@@ -42,7 +43,7 @@ async function proxyBotApi(request, url) {
   target.search = url.search;
 
   if (
-    (botPath === "/admin/dashboard-data" || botPath === "/admin/bot-profile") &&
+    (botPath === "/admin/dashboard-data" || botPath === "/admin/bot-profile" || botPath === "/admin/chat-summary") &&
     !target.searchParams.has("connection_id")
   ) {
     const connectionId = getRefererConnectionId(request);
