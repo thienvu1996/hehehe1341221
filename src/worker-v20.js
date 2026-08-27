@@ -75,7 +75,6 @@ function isContextualImageRequest(text) {
   if (/^(?:@\S+\s+)?(anh|hinh|photo|image)\b.{0,36}\b(gui|cho|tim|kiem|lay|xem|coi|send)\b/.test(normalized)) return true;
   if (/^(?:@\S+\s+)?(anh|hinh)\s+\S+/.test(normalized)) return true;
 
-  // Vietnamese shorthand: "a" means ảnh only in explicit command shapes.
   if (/^(?:@\S+\s+)?gui\s+a(?:\s+a)?\s+(xem|coi)\b/.test(normalized)) return true;
   if (/^(?:@\S+\s+)?cho\s+a\s+(xem|coi)\b/.test(normalized)) return true;
   if (/^(?:@\S+\s+)?a\s+dau\b/.test(normalized)) return true;
@@ -85,19 +84,29 @@ function isContextualImageRequest(text) {
 }
 
 function cleanExplicitImageQuery(text) {
-  let value = String(text || "").trim();
-  const normalizedOriginal = normalizeText(value);
-  value = value.replace(/@\S+/gu, " ");
-  value = value.replace(/\b(gửi|gui|send|cho|lấy|lay|tìm|tim|kiếm|kiem|giúp|giup|mình|minh|tôi|toi|em)\b/giu, " ");
-  value = value.replace(/\b(ảnh|anh|hình|hinh|photo|image|trên mạng|tren mang|trên web|tren web|web|mạng|mang)\b/giu, " ");
-  value = value.replace(/\b(xem|coi|đi|di|nha|nhé|nhe|đâu|dau|đại|dai|với|voi)\b/giu, " ");
-  if (/\bgui\s+a(?:\s+a)?\s+(xem|coi)\b/.test(normalizedOriginal) || /\ba\s+dau\b/.test(normalizedOriginal)) {
-    value = value.replace(/\ba\b/giu, " ");
-  }
-  value = value.replace(/[!?.,:;~]+/g, " ").replace(/\s+/g, " ").trim();
+  const original = String(text || "").replace(/@\S+/gu, " ").replace(/[!?.,:;~]+/g, " ");
+  const normalizedOriginal = normalizeText(original);
+  const shorthandA = /\bgui\s+a(?:\s+a)?\s+(xem|coi)\b/.test(normalizedOriginal) || /\ba\s+dau\b/.test(normalizedOriginal);
+  const stop = new Set([
+    "gui", "send", "cho", "lay", "tim", "kiem", "giup", "minh", "toi", "em",
+    "anh", "hinh", "photo", "image", "tren", "mang", "web", "xem", "coi", "di",
+    "nha", "nhe", "dau", "dai", "voi"
+  ]);
 
+  const kept = original
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .filter((token) => {
+      const normalized = normalizeText(token);
+      if (!normalized) return false;
+      if (shorthandA && normalized === "a") return false;
+      return !stop.has(normalized);
+    });
+
+  const value = kept.join(" ").trim();
   const normalized = normalizeText(value);
-  const fillerOnly = !normalized || /^(anh|a|xem|coi|di|nha|nhe|dau|ma|roi|thoi|nay|do|kia)(\s+(anh|a|xem|coi|di|nha|nhe|dau|ma|roi|thoi|nay|do|kia))*$/.test(normalized);
+  const fillerOnly = !normalized || /^(a|ma|roi|thoi|nay|do|kia)(\s+(a|ma|roi|thoi|nay|do|kia))*$/.test(normalized);
   return fillerOnly ? "" : value;
 }
 
@@ -127,8 +136,6 @@ function topicFromText(text, profile = {}) {
     if (pattern.test(normalized)) return query;
   }
 
-  // If the conversation is about the bot's appearance/persona, use the bot profile instead
-  // of a random unrelated picture. This is always presented as an illustration, not a real photo.
   if (/(em mac|em dep|anh em|hinh em|mat em|ngoai hinh|xem em)/.test(normalized)) {
     return personaImageQuery(profile);
   }
@@ -178,8 +185,6 @@ function resolveContextualImageQuery(text, context = {}) {
     };
   }
 
-  // Prefer the latest meaningful conversation topic. Bot output rows are also considered
-  // when available, so shorthand such as "gửi a xem đi" can resolve what "a" refers to.
   for (const row of context.recent || []) {
     const candidate = topicFromText(row?.text || "", profile);
     if (candidate) return { query: candidate, reason: "recent_context" };
@@ -376,9 +381,6 @@ export default {
       console.error("V20 image context router failed:", error);
     }
 
-    // Important: bypass V19 here. If a user is only discussing the previous image
-    // (for example "em là ai mà gửi ảnh này"), it must go to normal chat instead of
-    // being misclassified as another image command by the old keyword router.
     return workerV18.fetch(request, env, ctx);
   },
   async scheduled(event, env, ctx) {
