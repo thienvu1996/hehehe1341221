@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AdminNav } from "../components/admin-nav";
+import { DashboardTabPersistence } from "../components/dashboard-tab-persistence";
 import { ImageLightboxBridge } from "../components/image-lightbox-bridge";
 import { SessionExpiryGuard } from "../components/session-expiry-guard";
 import "./globals.css";
@@ -19,6 +20,7 @@ export default function RootLayout({
       <body>
         <SessionExpiryGuard />
         <ImageLightboxBridge />
+        <DashboardTabPersistence />
         <AdminNav />
         {children}
       </body>
