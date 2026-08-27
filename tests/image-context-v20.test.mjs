@@ -7,7 +7,7 @@ import {
   isImageReferenceQuestion,
   resolveContextualImageQuery,
   topicFromText
-} from "../src/worker-v20.js";
+} from "../src/worker-v21.js";
 
 test("image router does not resend an image when user only refers to previous image", () => {
   assert.equal(isImageReferenceQuestion("Em là ai mà gửi ảnh này"), true);
