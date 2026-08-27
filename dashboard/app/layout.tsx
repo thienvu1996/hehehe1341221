@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AdminNav } from "../components/admin-nav";
 import { DashboardTabPersistence } from "../components/dashboard-tab-persistence";
 import { ImageLightboxBridge } from "../components/image-lightbox-bridge";
+import { SessionBootstrapCover } from "../components/session-bootstrap-cover";
 import { SessionExpiryGuard } from "../components/session-expiry-guard";
 import "./globals.css";
 
@@ -18,6 +19,7 @@ export default function RootLayout({
   return (
     <html lang="vi">
       <body>
+        <SessionBootstrapCover />
         <SessionExpiryGuard />
         <ImageLightboxBridge />
         <DashboardTabPersistence />
