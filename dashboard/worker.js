@@ -5,13 +5,15 @@ const ALLOWED_API_PATHS = new Set([
   "/admin/bot-profile",
   "/admin/connections",
   "/admin/ai-permissions",
+  "/admin/ai-web-routes",
   "/admin/chat-summary"
 ]);
 const ALLOWED_API_PREFIXES = [
   "/admin/zalo-connections",
   "/admin/ai-providers",
   "/admin/ai-api-keys",
-  "/admin/ai-permissions"
+  "/admin/ai-permissions",
+  "/admin/ai-web-routes"
 ];
 
 function isAllowedApiPath(path) {
