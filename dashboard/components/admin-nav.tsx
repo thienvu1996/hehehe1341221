@@ -25,8 +25,12 @@ type Connection = {
   enabled: number | boolean;
 };
 
-function withConnection(path: string, connectionId: string) {
-  return connectionId === "main" ? path : `${path}?connection_id=${encodeURIComponent(connectionId)}`;
+function withConnection(path: string, connectionId: string, tab = "") {
+  const params = new URLSearchParams();
+  if (connectionId !== "main") params.set("connection_id", connectionId);
+  if (path === "/" && tab) params.set("tab", tab);
+  const search = params.toString();
+  return search ? `${path}?${search}` : path;
 }
 
 export function AdminNav() {
@@ -54,16 +58,21 @@ export function AdminNav() {
       .catch(() => {});
   }, [pathname]);
 
+  const currentTab = () => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("tab") || "";
+  };
+
   const openBot = (connectionId: string) => {
     setSelected(connectionId);
     const basePath = pathname.startsWith("/chat") ? "/chat" : "/";
-    window.location.href = withConnection(basePath, connectionId);
+    window.location.href = withConnection(basePath, connectionId, basePath === "/" ? currentTab() : "");
   };
 
   return (
     <div style={{ position: "sticky", top: 0, zIndex: 50, display: "flex", justifyContent: "center", background: "rgba(2,6,23,.88)", backdropFilter: "blur(14px)", borderBottom: "1px solid rgba(148,163,184,.12)" }}>
       <nav style={{ width: "100%", maxWidth: 1180, padding: "9px 18px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <Link href={withConnection("/", selected)} style={linkStyle(pathname === "/")}><LayoutDashboard size={15} /> Dashboard</Link>
+        <Link href={withConnection("/", selected, currentTab())} style={linkStyle(pathname === "/")}><LayoutDashboard size={15} /> Dashboard</Link>
         <Link href={withConnection("/chat", selected)} style={linkStyle(pathname.startsWith("/chat"))}><MessageCircleMore size={15} /> Chat tổng hợp</Link>
         <Link href="/connections" style={linkStyle(pathname.startsWith("/connections"))}><Bot size={15} /> Kết nối Zalo & AI</Link>
         {connections.length ? (
