@@ -5,6 +5,7 @@ import { resolveZaloConnection } from "./worker-v8.js";
 
 const ZALO_API_BASE_URL = "https://bot-api.zaloplatforms.com";
 const COMMONS_API_URL = "https://commons.wikimedia.org/w/api.php";
+const DEFAULT_RANDOM_IMAGE_QUERY = "phong cảnh thiên nhiên đẹp";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -52,20 +53,39 @@ function isUnsafeImageQuery(text) {
 function isWebImageRequest(text) {
   const normalized = normalizeText(text).replace(/\s+/g, " ").trim();
   if (!normalized) return false;
-  return (
-    /\b(gui|tim|kiem|cho|lay|send)\b.{0,24}\b(anh|hinh|photo|image)\b/.test(normalized) ||
-    /\b(anh|hinh|photo|image)\b.{0,24}\b(gui|tim|kiem|cho|lay|send)\b/.test(normalized) ||
-    /^(anh|hinh)\s+\S+/.test(normalized)
-  );
+
+  // Full Vietnamese/English wording.
+  if (/\b(gui|tim|kiem|cho|lay|send)\b.{0,28}\b(anh|hinh|photo|image)\b/.test(normalized)) return true;
+  if (/\b(anh|hinh|photo|image)\b.{0,28}\b(gui|tim|kiem|cho|lay|send|xem)\b/.test(normalized)) return true;
+  if (/^(anh|hinh)\s+\S+/.test(normalized)) return true;
+
+  // Vietnamese chat shorthand used in this bot: "a" = ảnh in phrases such as
+  // "gửi a xem đi", "gửi a a xem đi", "a đâu", "cho a xem".
+  if (/\bgui\s+a(?:\s+a)?\s+(?:xem|coi)\b/.test(normalized)) return true;
+  if (/\bcho\s+a\s+(?:xem|coi)\b/.test(normalized)) return true;
+  if (/\ba\s+dau\b/.test(normalized)) return true;
+
+  // "kiếm đại/tìm đại ảnh trên mạng" and similar loose wording.
+  if (/\b(kiem|tim|lay|gui)\s+dai\b.{0,24}\b(anh|hinh)\b/.test(normalized)) return true;
+
+  return false;
 }
 
 function extractImageQuery(text) {
   let value = String(text || "").trim();
   value = value.replace(/@\S+/gu, " ");
-  value = value.replace(/\b(gửi|gui|send|cho|lấy|lay|tìm|tim|kiếm|kiem|giúp|giup|mình|minh|tôi|toi|em|anh)\b/giu, " ");
-  value = value.replace(/\b(ảnh|anh|hình|hinh|photo|image|trên mạng|tren mang|trên web|tren web|web|mạng|mang)\b/giu, " ");
-  value = value.replace(/[!?.,:;]+/g, " ").replace(/\s+/g, " ").trim();
-  return value || "phong cảnh thiên nhiên";
+  value = value.replace(/\b(gửi|gui|send|cho|lấy|lay|tìm|tim|kiếm|kiem|giúp|giup|mình|minh|tôi|toi|em)\b/giu, " ");
+  value = value.replace(/\b(ảnh|hình|hinh|photo|image|trên mạng|tren mang|trên web|tren web|web|mạng|mang)\b/giu, " ");
+  value = value.replace(/\b(xem|coi|đi|di|nha|nhé|nhe|đâu|dau|đại|dai)\b/giu, " ");
+  // Remove a standalone "a" only for the known image-shorthand request shapes.
+  if (/\bgui\s+a(?:\s+a)?\s+(?:xem|coi)\b/i.test(normalizeText(text)) || /\ba\s+dau\b/i.test(normalizeText(text))) {
+    value = value.replace(/\ba\b/giu, " ");
+  }
+  value = value.replace(/[!?.,:;~]+/g, " ").replace(/\s+/g, " ").trim();
+
+  const normalized = normalizeText(value).replace(/\s+/g, " ").trim();
+  const fillerOnly = !normalized || /^(anh|a|xem|coi|di|nha|nhe|dau|ma|roi|thoi)(\s+(anh|a|xem|coi|di|nha|nhe|dau|ma|roi|thoi))*$/.test(normalized);
+  return fillerOnly ? DEFAULT_RANDOM_IMAGE_QUERY : value;
 }
 
 function randomIndex(max) {
@@ -186,9 +206,14 @@ async function handleWebImageRequest(request, env) {
   }
 
   try {
-    const images = await searchCommonsImages(query);
+    let images = await searchCommonsImages(query);
+    // If a vague Vietnamese phrase produces no result, still satisfy the user's intent by
+    // falling back to a generic safe photo instead of returning text-only chat.
+    if (!images.length && query !== DEFAULT_RANDOM_IMAGE_QUERY) {
+      images = await searchCommonsImages(DEFAULT_RANDOM_IMAGE_QUERY);
+    }
     if (!images.length) {
-      await sendMessage(connection, payload.message.chat.id, `Mình chưa kiếm được ảnh hợp với “${query}”. Thử nói cụ thể hơn nha.`);
+      await sendMessage(connection, payload.message.chat.id, "Mình chưa lấy được ảnh từ web lúc này. Thử lại sau một chút nha.");
       await logImageSearch(env, connection.id, payload.message, query, null, false, "no_results");
       return json({ message: "Success", provider: "web-image-v19", found: false });
     }
@@ -196,7 +221,7 @@ async function handleWebImageRequest(request, env) {
     // Try several candidates because a remote host/CDN URL can occasionally be rejected by Zalo.
     const start = randomIndex(images.length);
     let lastError = null;
-    for (let offset = 0; offset < Math.min(images.length, 6); offset += 1) {
+    for (let offset = 0; offset < Math.min(images.length, 8); offset += 1) {
       const image = images[(start + offset) % images.length];
       try {
         await sendPhoto(connection, payload.message.chat.id, image.url, `📷 ${query}\nNguồn: Wikimedia Commons`);
@@ -211,7 +236,7 @@ async function handleWebImageRequest(request, env) {
   } catch (error) {
     console.error("V19 web image request failed:", error);
     await logImageSearch(env, connection.id, payload.message, query, null, false, String(error?.message || error));
-    await sendMessage(connection, payload.message.chat.id, "Mình tìm được ý ảnh rồi nhưng lúc gửi ảnh từ web bị lỗi. Thử lại một câu ngắn như “gửi ảnh cây cối” nhé.").catch(() => {});
+    await sendMessage(connection, payload.message.chat.id, "Mình có nhận ra bạn đang xin ảnh, nhưng Zalo đang từ chối URL ảnh web. Thử lại sau một chút nha.").catch(() => {});
     return json({ message: "Success", provider: "web-image-v19", found: false, error: String(error?.message || error) });
   }
 }
