@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AdminNav } from "../components/admin-nav";
+import { BloubCursorFollower } from "../components/bloub-cursor-follower";
 import { DashboardTabPersistence } from "../components/dashboard-tab-persistence";
 import { ImageLightboxBridge } from "../components/image-lightbox-bridge";
 import { SessionBootstrapCover } from "../components/session-bootstrap-cover";
@@ -23,6 +24,7 @@ export default function RootLayout({
         <SessionExpiryGuard />
         <ImageLightboxBridge />
         <DashboardTabPersistence />
+        <BloubCursorFollower />
         <AdminNav />
         {children}
       </body>
