@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, LayoutDashboard, MessageCircleMore } from "lucide-react";
+import { Bot, Images, LayoutDashboard, MessageCircleMore } from "lucide-react";
 import { useEffect, useState } from "react";
 
 const linkStyle = (active: boolean): React.CSSProperties => ({
@@ -65,7 +65,7 @@ export function AdminNav() {
 
   const openBot = (connectionId: string) => {
     setSelected(connectionId);
-    const basePath = pathname.startsWith("/chat") ? "/chat" : "/";
+    const basePath = pathname.startsWith("/chat") ? "/chat" : pathname.startsWith("/characters") ? "/characters" : "/";
     window.location.href = withConnection(basePath, connectionId, basePath === "/" ? currentTab() : "");
   };
 
@@ -74,6 +74,7 @@ export function AdminNav() {
       <nav style={{ width: "100%", maxWidth: 1180, padding: "9px 18px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <Link href={withConnection("/", selected, currentTab())} style={linkStyle(pathname === "/")}><LayoutDashboard size={15} /> Dashboard</Link>
         <Link href={withConnection("/chat", selected)} style={linkStyle(pathname.startsWith("/chat"))}><MessageCircleMore size={15} /> Chat tổng hợp</Link>
+        <Link href={withConnection("/characters", selected)} style={linkStyle(pathname.startsWith("/characters"))}><Images size={15} /> Nhân vật 360</Link>
         <Link href="/connections" style={linkStyle(pathname.startsWith("/connections"))}><Bot size={15} /> Kết nối Zalo & AI</Link>
         {connections.length ? (
           <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 7, color: "#94a3b8", fontSize: 12, fontWeight: 700 }}>
