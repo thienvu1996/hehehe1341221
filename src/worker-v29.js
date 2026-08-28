@@ -47,35 +47,12 @@ function hasBotAddressing(text = "") {
   return /(^|\s)@bot\b/iu.test(String(text || ""));
 }
 
-function isReminderCreateText(message = {}, text = "") {
-  if (!isGroupChat(message) || !hasBotAddressing(text)) return false;
-  const n = normalizeText(text);
-  const hasVerb = /\b(nhac|thong bao|bao|tag|mention|hen gio|len lich|dat lich)\b/.test(n);
-  const hasTarget = /@all\b/i.test(text)
-    || /\b(tat ca moi nguoi|tat ca|moi nguoi|ca nhom|toan bo nhom)\b/.test(n)
-    || extractVisibleTargetName(text) !== "";
-  return hasVerb && hasTarget;
-}
-
 function reminderVerbEnd(text = "") {
-  const n = normalizeText(text);
-  const match = n.match(/\b(nhac|thong bao|bao|tag|mention|hen gio|len lich|dat lich)\b/);
-  if (!match) return 0;
-
   const raw = String(text || "");
-  const target = match[0];
-  let normalizedOffset = match.index || 0;
-  let rawOffset = 0;
-  let seen = 0;
-  for (const ch of raw) {
-    if (seen >= normalizedOffset) break;
-    const folded = normalizeText(ch);
-    seen += folded.length;
-    rawOffset += ch.length;
-  }
-  const tail = raw.slice(rawOffset);
-  const rawVerb = tail.match(/(nhắc|nhac|thông\s*báo|thong\s*bao|báo|bao|tag|mention|hẹn\s*giờ|hen\s*gio|lên\s*lịch|len\s*lich|đặt\s*lịch|dat\s*lich)/iu);
-  return rawOffset + (rawVerb?.index || 0) + (rawVerb?.[0]?.length || target.length);
+  const match = raw.match(
+    /(?:^|\s)(nhắc|nhac|thông\s*báo|thong\s*bao|báo|bao|tag|mention|hẹn\s*giờ|hen\s*gio|lên\s*lịch|len\s*lich|đặt\s*lịch|dat\s*lich)(?=\s|$)/iu
+  );
+  return match ? (match.index || 0) + match[0].length : 0;
 }
 
 function extractVisibleTargetName(text = "") {
@@ -93,6 +70,16 @@ function extractVisibleTargetName(text = "") {
   const name = String(match?.[1] || "").trim();
   if (!name || /^bot(?:\s|$)/iu.test(name)) return "";
   return name;
+}
+
+function isReminderCreateText(message = {}, text = "") {
+  if (!isGroupChat(message) || !hasBotAddressing(text)) return false;
+  const n = normalizeText(text);
+  const hasVerb = /\b(nhac|thong bao|bao|tag|mention|hen gio|len lich|dat lich)\b/.test(n);
+  const hasTarget = /@all\b/i.test(text)
+    || /\b(tat ca moi nguoi|tat ca|moi nguoi|ca nhom|toan bo nhom)\b/.test(n)
+    || extractVisibleTargetName(text) !== "";
+  return hasVerb && hasTarget;
 }
 
 function mentionContainers(message = {}) {
